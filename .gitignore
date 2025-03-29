@@ -1,0 +1,3 @@
+.venv
+data/raw/**/*.webp
+data/raw/**/*.mp4
