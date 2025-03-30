@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import dataclasses
 import functools
 import json
 import os
@@ -13,6 +14,16 @@ import tqdm
 from loguru import logger
 
 from gtg_eval import dataset, evaluation, logging, schema
+
+
+@dataclasses.dataclass
+class _Checkpoint:
+    state: schema.EvaluationState
+    total_time: float = 0.0
+    step_times: list[float] = dataclasses.field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 def parse_id_range(id_range: str) -> list[str]:
@@ -61,6 +72,9 @@ def setup_checkpoint_db(db_path: str) -> sqlite3.Connection:
         state_json TEXT NOT NULL,
         total_time REAL DEFAULT 0,
         step_times TEXT,  -- JSON array of step times
+        prompt_tokens INTEGER DEFAULT 0,
+        completion_tokens INTEGER DEFAULT 0,
+        total_tokens INTEGER DEFAULT 0,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -84,60 +98,61 @@ def setup_checkpoint_db(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def get_evaluation_state(
-    conn: sqlite3.Connection, game_id: str
-) -> tuple[schema.EvaluationState | None, float, list[float]]:
-    """Get the evaluation state and timing information for a game from the checkpoint database.
+def load_checkpoint(conn: sqlite3.Connection, game_id: str) -> _Checkpoint | None:
+    """Get the evaluation state, timing, and token usage information for a game from the checkpoint database.
 
     Args:
         conn: SQLite connection
         game_id: Game ID
 
     Returns:
-        Tuple of (evaluation_state, total_time, step_times)
-        evaluation_state will be None if not found
+        _Checkpoint object with evaluation state and metrics
+        If no state is found, state field will be None
     """
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT state_json, total_time, step_times FROM evaluation_states WHERE game_id = ?",
+        """SELECT state_json, total_time, step_times, prompt_tokens, completion_tokens, total_tokens 
+           FROM evaluation_states WHERE game_id = ?""",
         (game_id,),
     )
     result = cursor.fetchone()
 
     if result:
-        state_json, total_time, step_times_json = result
-        state = schema.EvaluationState.model_validate_json(state_json)
-        step_times = json.loads(step_times_json) if step_times_json else []
-        return state, total_time, step_times
-    return None, 0.0, []
+        state = schema.EvaluationState.model_validate_json(result[0])
+        step_times = json.loads(result[2]) if result[2] else []
+        return _Checkpoint(
+            state=state,
+            total_time=result[1],
+            step_times=step_times,
+            prompt_tokens=result[3],
+            completion_tokens=result[4],
+            total_tokens=result[5],
+        )
 
 
-def save_evaluation_state(
-    conn: sqlite3.Connection,
-    game_id: str,
-    state: schema.EvaluationState,
-    total_time: float,
-    step_times: list[float],
-):
-    """Save the evaluation state and timing for a game to the checkpoint database.
+def save_checkpoint(conn: sqlite3.Connection, game_id: str, ckpt: _Checkpoint):
+    """Save the game state to the checkpoint database.
 
     Args:
         conn: SQLite connection
         game_id: Game ID
-        state: Evaluation state
-        total_time: Total time spent on the game so far
-        step_times: List of times for each step
+        ckpt: _Checkpoint object containing evaluation state and metrics
     """
-    cursor = conn.cursor()
-    state_json = state.model_dump_json()
-    step_times_json = json.dumps(step_times)
-
-    cursor.execute(
+    conn.cursor().execute(
         """
-        INSERT OR REPLACE INTO evaluation_states (game_id, state_json, total_time, step_times, updated_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT OR REPLACE INTO evaluation_states 
+        (game_id, state_json, total_time, step_times, prompt_tokens, completion_tokens, total_tokens, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         """,
-        (game_id, state_json, total_time, step_times_json),
+        (
+            game_id,
+            ckpt.state.model_dump_json(),
+            ckpt.total_time,
+            json.dumps(ckpt.step_times),
+            ckpt.prompt_tokens,
+            ckpt.completion_tokens,
+            ckpt.total_tokens,
+        ),
     )
     conn.commit()
 
@@ -431,8 +446,14 @@ def main():
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ]
 
+    last_prompt_tokens = 0
+    last_completion_tokens = 0
+    last_total_tokens = 0
+
     def completion_with_tracking(messages, **kwargs):
         """Wrapper for litellm.completion that tracks token usage."""
+        nonlocal last_prompt_tokens, last_completion_tokens, last_total_tokens
+
         start_time = time.time()
         try:
             response = litellm.completion(messages=messages, **kwargs)
@@ -443,6 +464,11 @@ def main():
             prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
             completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
             total_tokens = prompt_tokens + completion_tokens
+
+            # Update token tracker
+            last_prompt_tokens = prompt_tokens
+            last_completion_tokens = completion_tokens
+            last_total_tokens = total_tokens
 
             # Log token usage
             logger.info(
@@ -483,51 +509,61 @@ def main():
     try:
         for i, game_id in enumerate(tqdm.tqdm(valid_game_ids)):
             game = ds[game_id]
-            logger.info(
-                "Processing game",
-                game_id=game_id,
-                progress=f"{i+1}/{len(valid_game_ids)}",
-            )
+            logger.info("Processing game", game_id=game_id)
 
             # Check if we have a checkpoint for this game
-            state, total_time, step_times = get_evaluation_state(conn, game_id)
+            ckpt = load_checkpoint(conn, game_id)
 
-            if state is None:
+            if ckpt.state is None:
                 # Initialize new state
-                state = schema.EvaluationState(game=game)
+                ckpt.state = schema.EvaluationState(game=game)
                 logger.info("Starting new evaluation", game_id=game_id)
             else:
                 logger.info(
                     "Resuming evaluation from checkpoint",
                     game_id=game_id,
-                    guesses=len(state.guesses),
-                    previous_time=total_time,
-                    previous_steps=len(step_times),
+                    guesses=len(ckpt.state.guesses),
+                    previous_time=ckpt.total_time,
+                    previous_steps=len(ckpt.step_times),
+                    prompt_tokens=ckpt.prompt_tokens,
+                    completion_tokens=ckpt.completion_tokens,
+                    total_tokens=ckpt.total_tokens,
                 )
 
             # Track timing for the game
             game_start_time = time.time()
 
             # Run evaluation steps until done
-            while not state.done:
+            while not ckpt.state.done:
                 step_start_time = time.time()
                 try:
-                    state = evaluation.progress(ds, state, template, completion_func)
+                    # Run the evaluation step
+                    ckpt.state = evaluation.progress(
+                        ds, ckpt.state, template, completion_func
+                    )
                     step_time = time.time() - step_start_time
-                    step_times.append(step_time)
+                    ckpt.step_times.append(step_time)
 
                     # Update timing information
-                    total_time += step_time
+                    ckpt.total_time += step_time
 
-                    # Save checkpoint and timing after each step
-                    save_evaluation_state(conn, game_id, state, total_time, step_times)
+                    # Update token usage from the token tracker
+                    ckpt.prompt_tokens += last_prompt_tokens
+                    ckpt.completion_tokens += last_completion_tokens
+                    ckpt.total_tokens += last_total_tokens
+
+                    # Save checkpoint after each step
+                    save_checkpoint(conn, game_id, ckpt)
 
                     logger.info(
                         "Evaluation step completed",
                         game_id=game_id,
-                        step=len(state.guesses),
+                        step=len(ckpt.state.guesses),
                         step_time=step_time,
-                        verdict=state.guesses[-1].verdict if state.guesses else None,
+                        verdict=ckpt.state.guesses[-1].verdict
+                        if ckpt.state.guesses
+                        else None,
+                        step_tokens=last_total_tokens,
                     )
                 except Exception as e:
                     logger.error(
@@ -540,28 +576,36 @@ def main():
 
             # Record final game timing
             current_session_time = time.time() - game_start_time
-            total_time += current_session_time
-            save_evaluation_state(conn, game_id, state, total_time, step_times)
+            ckpt.total_time += current_session_time
+            save_checkpoint(conn, game_id, ckpt)
 
             # Remove the raw messages from the state and replace with sanitized messages
-            sanitized_state = state.model_copy(
+            sanitized_state = ckpt.state.model_copy(
                 update={
-                    "messages": sanitize_messages_for_trace(state.messages, game_id)
+                    "messages": sanitize_messages_for_trace(
+                        ckpt.state.messages, game_id
+                    )
                 }
+            )
+
+            # Calculate average step time
+            avg_step_time = (
+                sum(ckpt.step_times) / len(ckpt.step_times) if ckpt.step_times else 0
             )
 
             # Create trace entry using typed models
             trace = schema.Trace(
                 game_id=game_id,
                 final_state=sanitized_state,
-                total_time=total_time,
-                step_times=step_times,
-                average_step_time=sum(step_times) / len(step_times)
-                if step_times
-                else 0,
-                solved=state.solved,
-                attempts=state.attempts,
-                same_franchise_at=state.same_franchise_at,
+                total_time=ckpt.total_time,
+                step_times=ckpt.step_times,
+                average_step_time=avg_step_time,
+                prompt_tokens=ckpt.prompt_tokens,
+                completion_tokens=ckpt.completion_tokens,
+                total_tokens=ckpt.total_tokens,
+                solved=ckpt.state.solved,
+                attempts=ckpt.state.attempts,
+                same_franchise_at=ckpt.state.same_franchise_at,
             )
 
             traces[game_id] = trace
@@ -573,10 +617,10 @@ def main():
             logger.info(
                 "Game evaluation completed",
                 game_id=game_id,
-                solved=state.solved,
-                attempts=state.attempts,
-                same_franchise_at=state.same_franchise_at,
-                total_time=total_time,
+                solved=ckpt.state.solved,
+                attempts=ckpt.state.attempts,
+                same_franchise_at=ckpt.state.same_franchise_at,
+                total_time=ckpt.total_time,
             )
 
             # Calculate and log partial metrics
@@ -602,6 +646,15 @@ def main():
             if output_dir and not os.path.exists(output_dir):
                 os.makedirs(output_dir)
 
+            # Calculate total token usage across all games
+            total_prompt_tokens = 0
+            total_completion_tokens = 0
+            total_tokens_used = 0
+            for trace_obj in traces.values():
+                total_prompt_tokens += trace_obj.prompt_tokens
+                total_completion_tokens += trace_obj.completion_tokens
+                total_tokens_used += trace_obj.total_tokens
+
             # Create evaluation output object
             output = schema.Output(
                 metadata=schema.EvalMetadata(
@@ -610,6 +663,9 @@ def main():
                     dataset=args.dataset,
                     timestamp=time.time(),
                     games_count=len(traces),
+                    prompt_tokens=total_prompt_tokens,
+                    completion_tokens=total_completion_tokens,
+                    total_tokens=total_tokens_used,
                 ),
                 metrics=metrics,
                 traces=traces,

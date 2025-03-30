@@ -81,6 +81,11 @@ class Trace(pydantic.BaseModel):
     step_times: list[float]
     average_step_time: float
 
+    # Token usage information
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
     solved: bool
     attempts: int
     same_franchise_at: int | None = None
@@ -109,6 +114,9 @@ class EvalMetadata(pydantic.BaseModel):
     dataset: str
     timestamp: float
     games_count: int
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 class Output(pydantic.BaseModel):
