@@ -73,8 +73,16 @@ class TestTitleCache:
 @pytest.mark.parametrize(
     "answer,expected",
     [
-        # Add your test cases here
-        # Example: ("Game Title", NormalizedAnswer(name="Game Title", franchise="Franchise"))
+        (
+            "Resident Evil 7: Biohazard",
+            NormalizedAnswer(
+                name="Resident Evil 7: Biohazard", franchise="Resident Evil"
+            ),
+        ),
+        (
+            "Xenoblade Chronicles 2",
+            NormalizedAnswer(name="Xenoblade Chronicles 2", franchise="Xenoblade"),
+        ),
     ],
 )
 def test_normalize_answer(answer, expected):
