@@ -287,7 +287,6 @@ def _run_game(
     if ckpt is None:
         # Initialize new state
         ckpt = _Checkpoint(state=schema.EvaluationState(game=game))
-        logger.info("Starting new evaluation", game_id=game_id)
     else:
         logger.info(
             "Resuming evaluation from checkpoint",
@@ -315,7 +314,7 @@ def _run_game(
         # Save checkpoint after each step
         save_checkpoint(conn, game_id, ckpt)
 
-        logger.info(
+        logger.trace(
             "Evaluation step completed",
             game_id=game_id,
             step=len(ckpt.state.guesses),
