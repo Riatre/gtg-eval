@@ -1,0 +1,15 @@
+{
+  "role": "user",
+  "content": [
+    {
+      "type": "text",
+      "text": "This is after 1. That's from the same franchise. Hint: 85"
+    },
+    {
+      "type": "image_url",
+      "image_url": {
+        "url": "data:image/webp;base64,bW9ja19pbWFnZV9kYXRhICgxLCAyLCBGYWxzZSk="
+      }
+    }
+  ]
+}

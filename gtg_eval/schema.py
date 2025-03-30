@@ -5,10 +5,10 @@ import litellm.types.llms.openai as litellm_openai
 
 class Game(pydantic.BaseModel):
     id: str
-    description: str
+    description: str | None = None
     answers: list[str]
     franchise: str
-    submitted_by: str
+    submitted_by: str | None = None
     release_year: str
     metacritic_score: str
     genre: str
