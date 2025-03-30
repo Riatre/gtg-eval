@@ -199,35 +199,16 @@ def calculate_metrics(traces: dict[str, schema.Trace]) -> schema.Metrics:
     first_correct_rounds = []  # First Correct Round
 
     for _, trace in traces.items():
-        guesses = trace.final_state.guesses
+        state = trace.final_state
 
-        # Skip if no guesses
-        if not guesses:
-            continue
+        if state.solved:
+            first_correct_rounds.append(state.attempts)
 
-        # Find first correct guess
-        first_correct = None
-        for i, guess in enumerate(guesses):
-            if guess.verdict == schema.Verdict.CORRECT:
-                first_correct = i + 1  # 1-indexed
-                break
-
-        if first_correct is not None:
-            first_correct_rounds.append(first_correct)
-
-        # Calculate Accuracy@k
-        for k in range(1, 7):
-            if k <= len(guesses) and any(
-                g.verdict == schema.Verdict.CORRECT for g in guesses[:k]
-            ):
+            for k in range(state.attempts, 7):
                 correct_at_k[k - 1] += 1
 
-        # Calculate Franchise Accuracy@k
-        for k in range(1, 7):
-            if k <= len(guesses) and any(
-                g.verdict in [schema.Verdict.CORRECT, schema.Verdict.SAME_FRANCHISE]
-                for g in guesses[:k]
-            ):
+        if state.same_franchise_at:
+            for k in range(state.same_franchise_at, 7):
                 franchise_at_k[k - 1] += 1
 
     # Calculate final metrics
