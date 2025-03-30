@@ -1,5 +1,5 @@
 [project]
-name = "gtg-eval"
+name = "gtg_eval"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -17,3 +17,6 @@ dependencies = [
 dev = [
     "pytest>=8.3.5",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
