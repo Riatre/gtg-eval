@@ -1,3 +1,5 @@
+from typing import Any
+
 import pydantic
 import enum
 import litellm.types.llms.openai as litellm_openai
@@ -69,3 +71,47 @@ class PromptTemplate(pydantic.BaseModel):
     after_3: str
     after_4: str
     after_5: str
+
+
+class Trace(pydantic.BaseModel):
+    game_id: str
+    final_state: EvaluationState
+
+    total_time: float
+    step_times: list[float]
+    average_step_time: float
+
+    solved: bool
+    attempts: int
+    same_franchise_at: int | None = None
+
+
+class Metrics(pydantic.BaseModel):
+    accuracy_at_1: float
+    accuracy_at_2: float
+    accuracy_at_3: float
+    accuracy_at_4: float
+    accuracy_at_5: float
+    accuracy_at_6: float
+    franchise_accuracy_at_1: float
+    franchise_accuracy_at_2: float
+    franchise_accuracy_at_3: float
+    franchise_accuracy_at_4: float
+    franchise_accuracy_at_5: float
+    franchise_accuracy_at_6: float
+    first_correct_round: float
+    solved_rate: float
+
+
+class EvalMetadata(pydantic.BaseModel):
+    model: str
+    model_config: dict[str, Any]
+    dataset: str
+    timestamp: float
+    games_count: int
+
+
+class Output(pydantic.BaseModel):
+    metadata: EvalMetadata
+    metrics: Metrics
+    traces: dict[str, Trace]
