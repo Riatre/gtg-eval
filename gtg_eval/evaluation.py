@@ -159,7 +159,7 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
                 title = result.get("title")
                 franchise = result.get("franchise")
 
-                if not title or not franchise:
+                if not title:
                     continue
 
                 # Cache this result regardless of match
@@ -182,6 +182,7 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
                 logger.warning(
                     "No exact title match found in API results",
                     query=query,
+                    results=results,
                     results_count=len(results),
                 )
                 matched = NormalizedAnswer(name=query, franchise=None)
