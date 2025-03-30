@@ -282,3 +282,97 @@ def build_next_prompt(
             },
         ],
     }
+
+
+def progress(
+    dataset: dataset.Dataset,
+    state: schema.EvaluationState,
+    template: schema.PromptTemplate,
+    completion: callable,
+) -> schema.EvaluationState:
+    """Run one step in the evaluation process.
+
+    This function takes the current evaluation state, builds the next prompt,
+    sends it to the VLM using the provided completion function, processes the
+    response, judges the answer, and returns the updated state.
+
+    Args:
+        dataset: The dataset containing game images
+        state: The current evaluation state
+        template: The prompt template to use
+        completion: A callable that takes a 'messages' argument and returns a completion
+                   (other arguments like model should be partial bound before passing)
+
+    Returns:
+        Updated evaluation state with the next prompt, model response, and judgment
+
+    Raises:
+        AssertionError: If the state is invalid (e.g., too many guesses or last verdict was correct)
+    """
+    assert not state.done, "Evaluation already complete"
+
+    # Build the next prompt
+    next_prompt = build_next_prompt(dataset, state, template, allow_video=False)
+
+    # Create messages list for the model
+    messages = state.messages.copy() + [next_prompt]
+
+    # Call the LLM using the provided completion function
+    logger.info("Calling LLM for evaluation step", step=len(state.guesses) + 1)
+    response = completion(messages=messages)
+
+    # Extract the model's response content
+    if isinstance(response, dict) and "choices" in response:
+        # Handle OpenAI-style response format
+        model_message = response["choices"][0]["message"]
+    elif hasattr(response, "choices") and len(response.choices) > 0:
+        model_message = response.choices[0].message
+    else:
+        logger.error("unexpected response", response=response)
+        raise RuntimeError("Invalid response format from completion function")
+
+    # Parse the answer from the model's response
+    if isinstance(model_message, dict) and "content" in model_message:
+        assert model_message["role"] == "assistant"
+        content = model_message["content"]
+    elif hasattr(model_message, "content"):
+        assert model_message.role == "assistant"
+        content = model_message.content
+    else:
+        logger.error("unexpected message", message=model_message)
+        raise RuntimeError("Invalid response format from completion function")
+
+    # Extract the game name from the response
+    logger.info("Model response", content=content)
+    answer_text = parse_answer(content)
+    if answer_text is None:
+        logger.warning("No answer found in model response", content=content)
+        # Default to empty string if no answer found; effectively a skip
+        answer_text = ""
+
+    # Normalize the answer to get the franchise information
+    normalized_answer = normalize_answer(answer_text)
+    logger.debug("Normalized answer", answer=normalized_answer)
+
+    # Judge the answer
+    verdict = judge(state.game, normalized_answer)
+    logger.debug("Judged", verdict=verdict)
+
+    # Create a new guess
+    new_guess = schema.Guess(answer=answer_text, verdict=verdict)
+
+    # Create a new state with the updated messages and guesses
+    new_state = schema.EvaluationState(
+        game=state.game,
+        guesses=state.guesses.copy() + [new_guess],
+        messages=messages + [model_message],
+    )
+
+    logger.info(
+        "Evaluation step completed",
+        step=len(state.guesses) + 1,
+        answer=answer_text,
+        verdict=verdict,
+    )
+
+    return new_state

@@ -11,6 +11,7 @@ from gtg_eval.evaluation import (
     NormalizedAnswer,
     judge,
     build_next_prompt,
+    progress,
 )
 from gtg_eval import schema, dataset
 
@@ -301,3 +302,211 @@ class TestBuildNextPrompt:
 
         with pytest.raises(AssertionError):
             build_next_prompt(test_dataset, state, test_template)
+
+def test_progress_initial_incorrect(test_dataset, test_template, test_game):
+    # Create a mock completion function that returns an incorrect answer
+    def mock_completion(messages):
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I think this is <name>Wrong Game</name>. The image shows...",
+                    }
+                }
+            ]
+        }
+
+    # Initial state with no guesses
+    state = schema.EvaluationState(game=test_game)
+
+    # Run progress with mock completion
+    result = progress(test_dataset, state, test_template, mock_completion)
+
+    # Verify the result
+    assert len(result.guesses) == 1
+    assert result.guesses[0].answer == "Wrong Game"
+    assert result.guesses[0].verdict == schema.Verdict.INCORRECT
+    assert len(result.messages) == 2  # Initial prompt + model response
+    assert not result.done
+    assert not result.solved
+    assert result.attempts == 1
+    assert result.same_franchise_at is None
+
+
+def test_progress_initial_correct(test_dataset, test_template, test_game):
+    # Create a mock completion function that returns a correct answer
+    def mock_completion(messages):
+        assert len(messages) == 1
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I think this is <name>Test Game</name>. The image shows...",
+                    }
+                }
+            ]
+        }
+
+    # Initial state with no guesses
+    state = schema.EvaluationState(game=test_game)
+
+    # Run progress with mock completion
+    result = progress(test_dataset, state, test_template, mock_completion)
+
+    # Verify the result
+    assert len(result.guesses) == 1
+    assert result.guesses[0].answer == "Test Game"
+    assert result.guesses[0].verdict == schema.Verdict.CORRECT
+    assert len(result.messages) == 2  # Initial prompt + model response
+    assert result.done  # Should be done because the answer is correct
+    assert result.solved  # Should be solved because the answer is correct
+    assert result.attempts == 1
+    assert result.same_franchise_at == 1
+
+
+def test_progress_same_franchise(test_dataset, test_template, test_game):
+    # Create a mock completion function that returns a same franchise answer
+    def mock_completion(messages):
+        assert len(messages) == 1
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I think this is <name>Same Franchise Game</name>. The image shows...",
+                    }
+                }
+            ]
+        }
+
+    # Mock the normalize_answer function to return a same franchise result
+    with mock.patch(
+        "gtg_eval.evaluation.normalize_answer",
+        return_value=NormalizedAnswer(
+            name="Same Franchise Game", franchise="Test Franchise"
+        ),
+    ):
+        # Initial state with no guesses
+        state = schema.EvaluationState(game=test_game)
+
+        # Run progress with mock completion
+        result = progress(test_dataset, state, test_template, mock_completion)
+
+        # Verify the result
+        assert len(result.guesses) == 1
+        assert result.guesses[0].answer == "Same Franchise Game"
+        assert result.guesses[0].verdict == schema.Verdict.SAME_FRANCHISE
+        assert len(result.messages) == 2  # Initial prompt + model response
+        assert not result.done  # Should not be done because the answer is not correct
+        # Should not be solved because the answer is not correct
+        assert not result.solved
+        assert result.same_franchise_at == 1  # First guess was same franchise
+
+
+def test_progress_subsequent_step(test_dataset, test_template, test_game):
+    # Create a mock completion function for the second step
+    def mock_completion(messages):
+        # Should have initial prompt + first response + second prompt
+        assert len(messages) == 3
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Now I think it's <name>Test Game</name>. The metacritic score helps...",
+                    }
+                }
+            ]
+        }
+
+    # Initial state with one incorrect guess
+    initial_state = schema.EvaluationState(
+        game=test_game,
+        guesses=[schema.Guess(answer="Wrong Game", verdict=schema.Verdict.INCORRECT)],
+        messages=[
+            {"role": "user", "content": ["Initial prompt"]},
+            {
+                "role": "assistant",
+                "content": "I think this is <name>Wrong Game</name>.",
+            },
+        ],
+    )
+
+    # Run progress with mock completion
+    result = progress(
+        test_dataset,
+        state=initial_state,
+        template=test_template,
+        completion=mock_completion,
+    )
+
+    # Verify the result
+    assert len(result.guesses) == 2
+    assert result.guesses[0].answer == "Wrong Game"
+    assert result.guesses[0].verdict == schema.Verdict.INCORRECT
+    assert result.guesses[1].answer == "Test Game"
+    assert result.guesses[1].verdict == schema.Verdict.CORRECT
+    assert len(result.messages) == 4  # 2 initial + 2 new
+    assert result.done  # Should be done because the second answer is correct
+    assert result.solved  # Should be solved because the second answer is correct
+    assert result.attempts == 2  # Two attempts were made
+
+
+def test_progress_no_answer_tag(test_dataset, test_template, test_game):
+    # Create a mock completion function that returns a response without <n> tags
+    def mock_completion(messages):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I'm not sure what game this is. The image is unclear.",
+                    }
+                }
+            ]
+        }
+
+    # Initial state with no guesses
+    state = schema.EvaluationState(game=test_game)
+
+    # Run progress with mock completion
+    result = progress(test_dataset, state, test_template, mock_completion)
+
+    # Verify the result
+    assert len(result.guesses) == 1
+    assert result.guesses[0].answer == ""  # Empty answer when no tags found
+    assert result.guesses[0].verdict == schema.Verdict.INCORRECT
+    assert len(result.messages) == 2  # Initial prompt + model response
+
+
+def test_progress_with_done_state(test_dataset, test_template, test_game):
+    # Create a mock completion function (should not be called)
+    def mock_completion(messages):
+        pytest.fail("Completion function should not be called when state is done")
+
+    # Create a state with a correct guess (done state)
+    state = schema.EvaluationState(
+        game=test_game,
+        guesses=[schema.Guess(answer="Test Game", verdict=schema.Verdict.CORRECT)],
+    )
+    assert state.done
+
+    # Run progress with mock completion should raise AssertionError
+    with pytest.raises(AssertionError):
+        progress(test_dataset, state, test_template, mock_completion)
+
+    # Create a state with 6 guesses (done state)
+    state = schema.EvaluationState(
+        game=test_game,
+        guesses=[schema.Guess(answer="Wrong Game", verdict=schema.Verdict.INCORRECT)]
+        * 6,
+    )
+    assert state.done
+
+    # Run progress with mock completion should raise AssertionError
+    with pytest.raises(AssertionError):
+        progress(test_dataset, state, test_template, mock_completion)

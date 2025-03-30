@@ -52,7 +52,7 @@ class EvaluationState(pydantic.BaseModel):
     def same_franchise_at(self) -> int | None:
         return next(
             (
-                i
+                i + 1
                 for i, guess in enumerate(self.guesses)
                 if guess.verdict in (Verdict.SAME_FRANCHISE, Verdict.CORRECT)
             ),
