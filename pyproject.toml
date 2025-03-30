@@ -5,6 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "datasets>=3.5.0",
+    "litellm>=1.65.0",
+    "loguru>=0.7.3",
+    "pydantic>=2.11.1",
     "requests>=2.32.3",
     "tqdm>=4.67.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
 ]
