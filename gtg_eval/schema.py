@@ -110,7 +110,7 @@ class Metrics(pydantic.BaseModel):
 
 class EvalMetadata(pydantic.BaseModel):
     model: str
-    model_config: dict[str, Any]
+    model_params: dict[str, Any]
     dataset: str
     timestamp: float
     games_count: int

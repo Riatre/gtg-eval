@@ -528,7 +528,7 @@ def main():
     output = schema.Output(
         metadata=schema.EvalMetadata(
             model=args.model,
-            model_config=completion_kwargs,
+            model_params=completion_kwargs,
             dataset=args.dataset,
             timestamp=time.time(),
             games_count=len(traces),
