@@ -8,9 +8,6 @@ def setup_logging(level="INFO"):
     Args:
         level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     """
-    # Remove default handler
-    logger.remove()
-
     # Create logs directory if it doesn't exist
     os.makedirs("logs", exist_ok=True)
 
