@@ -2,7 +2,6 @@ from typing import Any
 
 import pydantic
 import enum
-import litellm.types.llms.openai as litellm_openai
 
 
 class Game(pydantic.BaseModel):
