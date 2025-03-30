@@ -32,6 +32,33 @@ class EvaluationState(pydantic.BaseModel):
     guesses: list[Guess] = []
     messages: list[litellm_openai.AllMessageValues] = []
 
+    @property
+    def done(self) -> bool:
+        return (
+            len(self.guesses) >= 6
+            or self.guesses
+            and self.guesses[-1].verdict == Verdict.CORRECT
+        )
+
+    @property
+    def solved(self) -> bool:
+        return self.guesses and self.guesses[-1].verdict == Verdict.CORRECT
+
+    @property
+    def attempts(self) -> int:
+        return len(self.guesses)
+
+    @property
+    def same_franchise_at(self) -> int | None:
+        return next(
+            (
+                i
+                for i, guess in enumerate(self.guesses)
+                if guess.verdict in (Verdict.SAME_FRANCHISE, Verdict.CORRECT)
+            ),
+            None,
+        )
+
 
 class PromptTemplate(pydantic.BaseModel):
     initial: str
