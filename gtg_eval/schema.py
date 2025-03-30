@@ -32,7 +32,7 @@ class Guess(pydantic.BaseModel):
 class EvaluationState(pydantic.BaseModel):
     game: Game
     guesses: list[Guess] = []
-    messages: list[litellm_openai.AllMessageValues] = []
+    messages: list = []
 
     @property
     def done(self) -> bool:

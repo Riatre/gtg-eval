@@ -315,35 +315,19 @@ def progress(
     next_prompt = build_next_prompt(dataset, state, template, allow_video=False)
 
     # Create messages list for the model
-    messages = state.messages.copy() + [next_prompt]
+    messages = state.messages + [next_prompt]
 
     # Call the LLM using the provided completion function
     logger.info("Calling LLM for evaluation step", step=len(state.guesses) + 1)
     response = completion(messages=messages)
+    logger.debug("Model response", response=response)
 
-    # Extract the model's response content
-    if isinstance(response, dict) and "choices" in response:
-        # Handle OpenAI-style response format
-        model_message = response["choices"][0]["message"]
-    elif hasattr(response, "choices") and len(response.choices) > 0:
-        model_message = response.choices[0].message
-    else:
-        logger.error("unexpected response", response=response)
-        raise RuntimeError("Invalid response format from completion function")
-
-    # Parse the answer from the model's response
-    if isinstance(model_message, dict) and "content" in model_message:
-        assert model_message["role"] == "assistant"
-        content = model_message["content"]
-    elif hasattr(model_message, "content"):
-        assert model_message.role == "assistant"
-        content = model_message.content
-    else:
-        logger.error("unexpected message", message=model_message)
-        raise RuntimeError("Invalid response format from completion function")
+    model_message = response.choices[0].message
+    assert model_message.role == "assistant"
+    content = model_message.content
 
     # Extract the game name from the response
-    logger.info("Model response", content=content)
+    logger.info("Model response message", content=content)
     answer_text = parse_answer(content)
     if answer_text is None:
         logger.warning("No answer found in model response", content=content)
@@ -365,7 +349,7 @@ def progress(
     new_state = schema.EvaluationState(
         game=state.game,
         guesses=state.guesses.copy() + [new_guess],
-        messages=messages + [model_message],
+        messages=messages + [model_message.model_dump()],
     )
 
     logger.info(

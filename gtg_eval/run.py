@@ -123,7 +123,7 @@ def save_checkpoint(conn: sqlite3.Connection, game_id: str, ckpt: _Checkpoint):
         """
         INSERT OR REPLACE INTO evaluation_states 
         (game_id, state_json, step_times, prompt_tokens, completion_tokens, total_tokens, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         """,
         (
             game_id,
@@ -271,9 +271,6 @@ class LLM:
         if hasattr(response, "usage"):
             prompt_tokens = getattr(response.usage, "prompt_tokens", 0)
             completion_tokens = getattr(response.usage, "completion_tokens", 0)
-        elif "usage" in response:
-            prompt_tokens = response["usage"].get("prompt_tokens", 0)
-            completion_tokens = response["usage"].get("completion_tokens", 0)
         total_tokens = prompt_tokens + completion_tokens
 
         # Update token tracker
@@ -306,9 +303,9 @@ def _run_game(
     # Check if we have a checkpoint for this game
     ckpt = load_checkpoint(conn, game_id)
 
-    if ckpt.state is None:
+    if ckpt is None:
         # Initialize new state
-        ckpt.state = schema.EvaluationState(game=game)
+        ckpt = _Checkpoint(state=schema.EvaluationState(game=game))
         logger.info("Starting new evaluation", game_id=game_id)
     else:
         logger.info(
@@ -431,9 +428,9 @@ def main():
     args = _build_argparse().parse_args()
     logging.setup_logging(level=args.log_level)
 
-    if not litellm.supports_vision(model=args.model):
-        logger.error("Model does not support vision", model=args.model)
-        return 1
+    # if not litellm.supports_vision(model=args.model):
+    #     logger.error("Model does not support vision", model=args.model)
+    #     return 1
 
     game_ids = parse_id_range(args.game_ids)
     logger.info("games to evaluate", count=len(game_ids))
@@ -444,6 +441,8 @@ def main():
     except Exception as e:
         logger.error("Failed to load dataset", error=str(e), exc_info=True)
         return 1
+
+    assert ds.validate()
 
     # Filter game IDs to those that exist in the dataset
     valid_game_ids = [gid for gid in game_ids if gid in ds.games]
