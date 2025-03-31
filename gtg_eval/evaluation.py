@@ -45,18 +45,17 @@ def normalize_title(title: str) -> str:
     # Convert to lowercase
     result = str(title).lower()
 
+    # Replace full-width quotes with standard quotes
+    result = result.replace("’", "'").replace('"', "'")
+
     # Normalize unicode characters (accented characters to ASCII)
     result = (
         unicodedata.normalize("NFKD", result).encode("ASCII", "ignore").decode("ASCII")
     )
 
-    # Replace full-width quotes with standard quotes
-    result = (
-        result.replace(""", "'").replace(""", "'").replace('"', '"').replace('"', '"')
-    )
-
     # Remove special characters like !, ?, etc.
-    result = re.sub(r"[!?:;&@#$%^*()+=\[\]{}<>|/\\~`\.]", "", result)
+    result = re.sub(r"[!?:;&@#$%^*()+=\[\]{}<>|/\\~`-]", " ", result)
+    result = re.sub(r"\.", "", result)
 
     # Normalize whitespace (replace multiple spaces with single space)
     result = re.sub(r"\s+", " ", result).strip()
