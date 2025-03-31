@@ -6,11 +6,9 @@ import sqlite3
 import unicodedata
 from typing import Callable
 
-import litellm.types.llms.openai as litellm_openai
-import requests
+import httpx
+import tenacity
 from loguru import logger
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from gtg_eval import dataset, schema
 
@@ -62,33 +60,6 @@ def normalize_title(title: str) -> str:
     result = re.sub(r"\s+", " ", result).strip()
 
     return result
-
-
-def _setup_api_session():
-    """Set up an HTTP session with retry capabilities."""
-    # Configure retry strategy
-    retry_strategy = Retry(
-        total=3,  # Maximum number of retries
-        status_forcelist=[429, 500, 502, 503, 504],  # HTTP status codes to retry on
-        backoff_factor=1,  # Backoff factor for exponential backoff
-        respect_retry_after_header=True,  # Honor Retry-After header
-        raise_on_status=True,  # Raise exception on status
-    )
-
-    # Create adapter with retry strategy
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-
-    # Create session and mount adapter
-    _api_session = requests.Session()
-    _api_session.mount("https://", adapter)
-    _api_session.mount("http://", adapter)
-
-    # Set user agent
-    _api_session.headers.update({"User-Agent": "GTGEval/1.0"})
-    return _api_session
-
-
-_api_session = _setup_api_session()
 
 
 class _TitleCache:
@@ -168,7 +139,12 @@ class _TitleCache:
 _title_cache = _TitleCache()
 
 
-def normalize_answer(answer: str) -> NormalizedAnswer:
+@tenacity.retry(
+    stop=tenacity.stop_after_attempt(3),
+    wait=tenacity.wait_exponential(),
+    retry=tenacity.retry_if_exception_type(httpx.RequestError),
+)
+async def normalize_answer(answer: str) -> NormalizedAnswer:
     query = answer.strip()
 
     if not query:
@@ -193,10 +169,10 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
 
     try:
         logger.debug("Querying franchise API", query=query, normalized=normalized_query)
-        response = _api_session.get(base_url, params=params, timeout=10)
-        # raise_for_status is handled by the retry mechanism
-
-        data = response.json()
+        async with httpx.AsyncClient(headers={"User-Agent": "GTGEval/1.0"}) as session:
+            response = await session.get(base_url, params=params)
+            response.raise_for_status()
+            data = response.json()
 
         matched: NormalizedAnswer | None = None
 
@@ -255,19 +231,12 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
             # Cache None for this query
             _title_cache.put(query, query, None)
             return NormalizedAnswer(name=query, franchise=None)
-    except requests.RequestException as e:
-        logger.error(
-            "API request failed after retries",
-            query=query,
-            error=str(e),
-            exc_info=True,
-        )
+    except httpx.RequestError:
+        logger.exception("Franchise API request failed", query=query)
         raise
-    except (ValueError, KeyError, TypeError) as e:
+    except (ValueError, KeyError, TypeError):
         # JSON parsing error or unexpected response format
-        logger.error(
-            "API response parsing error", query=query, error=str(e), exc_info=True
-        )
+        logger.exception("Franchise API response parsing error", query=query)
         raise
 
 
@@ -288,17 +257,17 @@ def judge(game: schema.Game, normalized: NormalizedAnswer) -> schema.Verdict:
     return schema.Verdict.INCORRECT
 
 
-def build_next_prompt(
+async def build_next_prompt(
     dataset: dataset.Dataset,
     state: schema.EvaluationState,
     template: schema.PromptTemplate,
     *,
     allow_video: bool = False,
-) -> litellm_openai.AllMessageValues:
+):
     nth_guess = len(state.guesses)
     assert 0 <= nth_guess < 6, f"Invalid state: {nth_guess=}"
     game = state.game
-    next_screenshot = dataset.screenshot_of(
+    next_screenshot = await dataset.screenshot_of(
         game, nth_guess + 1, allow_video=allow_video
     )
     next_screenshot_b64 = base64.b64encode(next_screenshot.read()).decode()
@@ -345,7 +314,7 @@ def build_next_prompt(
     }
 
 
-def progress(
+async def progress(
     dataset: dataset.Dataset,
     state: schema.EvaluationState,
     template: schema.PromptTemplate,
@@ -373,14 +342,14 @@ def progress(
     assert not state.done, "Evaluation already complete"
 
     # Build the next prompt
-    next_prompt = build_next_prompt(dataset, state, template, allow_video=False)
+    next_prompt = await build_next_prompt(dataset, state, template, allow_video=False)
 
     # Create messages list for the model
     messages = state.messages + [next_prompt]
 
     # Call the LLM using the provided completion function
     logger.info("Calling LLM for evaluation step", step=len(state.guesses) + 1)
-    response = completion(messages=messages)
+    response = await completion(messages=messages)
     logger.debug("Model response", response=response)
 
     if isinstance(response, dict):
@@ -403,7 +372,7 @@ def progress(
         answer_text = ""
 
     # Normalize the answer to get the franchise information
-    normalized_answer = normalize_answer(answer_text)
+    normalized_answer = await normalize_answer(answer_text)
     logger.debug("Normalized answer", answer=normalized_answer)
 
     # Judge the answer

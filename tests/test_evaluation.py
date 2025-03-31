@@ -87,15 +87,15 @@ class TestTitleCache:
         ),
     ],
 )
-def test_normalize_answer(answer, expected):
-    assert normalize_answer(answer) == expected
+@pytest.mark.asyncio
+async def test_normalize_answer(answer, expected):
+    assert await normalize_answer(answer) == expected
 
 
 @pytest.fixture
 def test_game():
     return schema.Game(
         id="1",
-        title="Test Game",
         answers=["Test Game", "Test Game 1"],
         franchise="Test Franchise",
         metacritic_score="85",
@@ -140,8 +140,8 @@ class TestJudge:
 def test_dataset():
     mock_ds = mock.MagicMock(spec=dataset.Dataset)
 
-    # Create a MagicMock for screenshot_of method
-    mock_ds.screenshot_of = mock.MagicMock()
+    # Create a AsyncMock for screenshot_of method
+    mock_ds.screenshot_of = mock.AsyncMock()
 
     # Configure the mock to return a file-like object
     def side_effect(game, nth_guess, allow_video=False):
@@ -182,10 +182,11 @@ class TestBuildNextPrompt:
         # Compare the entire dictionary
         assert result == expected
 
-    def test_build_initial_prompt(self, test_dataset, test_template, test_game):
+    @pytest.mark.asyncio
+    async def test_build_initial_prompt(self, test_dataset, test_template, test_game):
         state = schema.EvaluationState(game=test_game)
 
-        result = build_next_prompt(test_dataset, state, test_template)
+        result = await build_next_prompt(test_dataset, state, test_template)
 
         # Compare with golden file
         self._compare_with_golden_file(result, "build_next_prompt_initial.json")
@@ -195,7 +196,8 @@ class TestBuildNextPrompt:
             test_game, 1, allow_video=False
         )
 
-    def test_build_subsequent_prompt_incorrect(
+    @pytest.mark.asyncio
+    async def test_build_subsequent_prompt_incorrect(
         self, test_dataset, test_template, test_game
     ):
         # Test with one incorrect guess
@@ -205,7 +207,7 @@ class TestBuildNextPrompt:
         )
         state = schema.EvaluationState(game=test_game, guesses=[guess])
 
-        result = build_next_prompt(test_dataset, state, test_template)
+        result = await build_next_prompt(test_dataset, state, test_template)
 
         # Compare with golden file
         self._compare_with_golden_file(result, "build_next_prompt_incorrect.json")
@@ -215,7 +217,8 @@ class TestBuildNextPrompt:
             test_game, 2, allow_video=False
         )
 
-    def test_build_subsequent_prompt_same_franchise(
+    @pytest.mark.asyncio
+    async def test_build_subsequent_prompt_same_franchise(
         self, test_dataset, test_template, test_game
     ):
         # Test with one same-franchise guess
@@ -225,7 +228,7 @@ class TestBuildNextPrompt:
         )
         state = schema.EvaluationState(game=test_game, guesses=[guess])
 
-        result = build_next_prompt(test_dataset, state, test_template)
+        result = await build_next_prompt(test_dataset, state, test_template)
 
         # Compare with golden file
         self._compare_with_golden_file(result, "build_next_prompt_same_franchise.json")
@@ -235,7 +238,8 @@ class TestBuildNextPrompt:
             test_game, 2, allow_video=False
         )
 
-    def test_build_prompt_with_multiple_guesses(
+    @pytest.mark.asyncio
+    async def test_build_prompt_with_multiple_guesses(
         self, test_dataset, test_template, test_game
     ):
         # Test with multiple guesses
@@ -248,7 +252,7 @@ class TestBuildNextPrompt:
         ]
         state = schema.EvaluationState(game=test_game, guesses=guesses)
 
-        result = build_next_prompt(test_dataset, state, test_template)
+        result = await build_next_prompt(test_dataset, state, test_template)
 
         # Compare with golden file
         self._compare_with_golden_file(
@@ -260,12 +264,15 @@ class TestBuildNextPrompt:
             test_game, 4, allow_video=False
         )
 
-    def test_build_prompt_with_allow_video(
+    @pytest.mark.asyncio
+    async def test_build_prompt_with_allow_video(
         self, test_dataset, test_template, test_game
     ):
         state = schema.EvaluationState(game=test_game, guesses=[])
 
-        result = build_next_prompt(test_dataset, state, test_template, allow_video=True)
+        result = await build_next_prompt(
+            test_dataset, state, test_template, allow_video=True
+        )
 
         # Compare with golden file
         self._compare_with_golden_file(result, "build_next_prompt_allow_video.json")
@@ -275,7 +282,8 @@ class TestBuildNextPrompt:
             test_game, 1, allow_video=True
         )
 
-    def test_build_prompt_with_invalid_state(
+    @pytest.mark.asyncio
+    async def test_build_prompt_with_invalid_state(
         self, test_dataset, test_template, test_game
     ):
         # Test with too many guesses
@@ -290,9 +298,10 @@ class TestBuildNextPrompt:
         state = schema.EvaluationState(game=test_game, guesses=guesses)
 
         with pytest.raises(AssertionError):
-            build_next_prompt(test_dataset, state, test_template)
+            await build_next_prompt(test_dataset, state, test_template)
 
-    def test_build_prompt_with_correct_verdict(
+    @pytest.mark.asyncio
+    async def test_build_prompt_with_correct_verdict(
         self, test_dataset, test_template, test_game
     ):
         # Test with a correct guess, which should not be allowed
@@ -302,11 +311,13 @@ class TestBuildNextPrompt:
         state = schema.EvaluationState(game=test_game, guesses=guesses)
 
         with pytest.raises(AssertionError):
-            build_next_prompt(test_dataset, state, test_template)
+            await build_next_prompt(test_dataset, state, test_template)
 
-def test_progress_initial_incorrect(test_dataset, test_template, test_game):
+
+@pytest.mark.asyncio
+async def test_progress_initial_incorrect(test_dataset, test_template, test_game):
     # Create a mock completion function that returns an incorrect answer
-    def mock_completion(messages):
+    async def mock_completion(messages):
         assert len(messages) == 1
         assert messages[0]["role"] == "user"
         return {
@@ -324,7 +335,7 @@ def test_progress_initial_incorrect(test_dataset, test_template, test_game):
     state = schema.EvaluationState(game=test_game)
 
     # Run progress with mock completion
-    result = progress(test_dataset, state, test_template, mock_completion)
+    result = await progress(test_dataset, state, test_template, mock_completion)
 
     # Verify the result
     assert len(result.guesses) == 1
@@ -337,9 +348,10 @@ def test_progress_initial_incorrect(test_dataset, test_template, test_game):
     assert result.same_franchise_at is None
 
 
-def test_progress_initial_correct(test_dataset, test_template, test_game):
+@pytest.mark.asyncio
+async def test_progress_initial_correct(test_dataset, test_template, test_game):
     # Create a mock completion function that returns a correct answer
-    def mock_completion(messages):
+    async def mock_completion(messages):
         assert len(messages) == 1
         return {
             "choices": [
@@ -356,7 +368,7 @@ def test_progress_initial_correct(test_dataset, test_template, test_game):
     state = schema.EvaluationState(game=test_game)
 
     # Run progress with mock completion
-    result = progress(test_dataset, state, test_template, mock_completion)
+    result = await progress(test_dataset, state, test_template, mock_completion)
 
     # Verify the result
     assert len(result.guesses) == 1
@@ -369,9 +381,10 @@ def test_progress_initial_correct(test_dataset, test_template, test_game):
     assert result.same_franchise_at == 1
 
 
-def test_progress_same_franchise(test_dataset, test_template, test_game):
+@pytest.mark.asyncio
+async def test_progress_same_franchise(test_dataset, test_template, test_game):
     # Create a mock completion function that returns a same franchise answer
-    def mock_completion(messages):
+    async def mock_completion(messages):
         assert len(messages) == 1
         return {
             "choices": [
@@ -395,7 +408,7 @@ def test_progress_same_franchise(test_dataset, test_template, test_game):
         state = schema.EvaluationState(game=test_game)
 
         # Run progress with mock completion
-        result = progress(test_dataset, state, test_template, mock_completion)
+        result = await progress(test_dataset, state, test_template, mock_completion)
 
         # Verify the result
         assert len(result.guesses) == 1
@@ -408,9 +421,10 @@ def test_progress_same_franchise(test_dataset, test_template, test_game):
         assert result.same_franchise_at == 1  # First guess was same franchise
 
 
-def test_progress_subsequent_step(test_dataset, test_template, test_game):
+@pytest.mark.asyncio
+async def test_progress_subsequent_step(test_dataset, test_template, test_game):
     # Create a mock completion function for the second step
-    def mock_completion(messages):
+    async def mock_completion(messages):
         # Should have initial prompt + first response + second prompt
         assert len(messages) == 3
         return {
@@ -438,7 +452,7 @@ def test_progress_subsequent_step(test_dataset, test_template, test_game):
     )
 
     # Run progress with mock completion
-    result = progress(
+    result = await progress(
         test_dataset,
         state=initial_state,
         template=test_template,
@@ -457,9 +471,10 @@ def test_progress_subsequent_step(test_dataset, test_template, test_game):
     assert result.attempts == 2  # Two attempts were made
 
 
-def test_progress_no_answer_tag(test_dataset, test_template, test_game):
+@pytest.mark.asyncio
+async def test_progress_no_answer_tag(test_dataset, test_template, test_game):
     # Create a mock completion function that returns a response without <n> tags
-    def mock_completion(messages):
+    async def mock_completion(messages):
         return {
             "choices": [
                 {
@@ -475,7 +490,7 @@ def test_progress_no_answer_tag(test_dataset, test_template, test_game):
     state = schema.EvaluationState(game=test_game)
 
     # Run progress with mock completion
-    result = progress(test_dataset, state, test_template, mock_completion)
+    result = await progress(test_dataset, state, test_template, mock_completion)
 
     # Verify the result
     assert len(result.guesses) == 1
@@ -484,9 +499,10 @@ def test_progress_no_answer_tag(test_dataset, test_template, test_game):
     assert len(result.messages) == 2  # Initial prompt + model response
 
 
-def test_progress_with_done_state(test_dataset, test_template, test_game):
+@pytest.mark.asyncio
+async def test_progress_with_done_state(test_dataset, test_template, test_game):
     # Create a mock completion function (should not be called)
-    def mock_completion(messages):
+    async def mock_completion(messages):
         pytest.fail("Completion function should not be called when state is done")
 
     # Create a state with a correct guess (done state)
@@ -498,7 +514,7 @@ def test_progress_with_done_state(test_dataset, test_template, test_game):
 
     # Run progress with mock completion should raise AssertionError
     with pytest.raises(AssertionError):
-        progress(test_dataset, state, test_template, mock_completion)
+        await progress(test_dataset, state, test_template, mock_completion)
 
     # Create a state with 6 guesses (done state)
     state = schema.EvaluationState(
@@ -510,7 +526,7 @@ def test_progress_with_done_state(test_dataset, test_template, test_game):
 
     # Run progress with mock completion should raise AssertionError
     with pytest.raises(AssertionError):
-        progress(test_dataset, state, test_template, mock_completion)
+        await progress(test_dataset, state, test_template, mock_completion)
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 import io
 import pathlib
-import subprocess
+import asyncio
 from typing import BinaryIO, Iterator
 
 from loguru import logger
@@ -33,7 +33,7 @@ class Dataset:
 
         logger.info("Dataset loaded", path=str(jsonl_path), game_count=len(self.games))
 
-    def screenshot_of(
+    async def screenshot_of(
         self, game: schema.Game | str, nth: int, *, allow_video: bool = False
     ) -> BinaryIO:
         """Get the nth screenshot of the given game.
@@ -90,52 +90,42 @@ class Dataset:
             return io.BytesIO(self._frame_cache[cache_key])
 
         # Extract first frame from video and convert to webp
-        try:
-            logger.debug(
-                "Extracting frame from video",
-                game_id=game_id,
-                screenshot=nth,
-                video_path=str(video_path),
-            )
-            # Use ffmpeg to extract the first frame
-            result = subprocess.run(
-                [
-                    "ffmpeg",
-                    "-i",
-                    str(video_path),
-                    "-vframes",
-                    "1",
-                    "-f",
-                    "image2pipe",
-                    "-c:v",
-                    "webp",
-                    "-lossless",
-                    "0",
-                    "-compression_level",
-                    "6",
-                    "-quality",
-                    "90",
-                    "-",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=True,
-            )
+        logger.debug(
+            "Extracting frame from video",
+            game_id=game_id,
+            screenshot=nth,
+            video_path=str(video_path),
+        )
+        # Use ffmpeg to extract the first frame
+        result = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-i",
+            str(video_path),
+            "-vframes",
+            "1",
+            "-f",
+            "image2pipe",
+            "-c:v",
+            "webp",
+            "-lossless",
+            "0",
+            "-compression_level",
+            "6",
+            "-quality",
+            "90",
+            "-",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await result.communicate()
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to extract frame from video: {stderr}")
 
-            # Store the frame data in cache
-            self._frame_cache[cache_key] = result.stdout
+        # Store the frame data in cache
+        self._frame_cache[cache_key] = result.stdout
 
-            # Return a new BytesIO with the frame data
-            return io.BytesIO(result.stdout)
-        except (subprocess.SubprocessError, OSError) as e:
-            logger.error(
-                "Failed to extract frame",
-                game_id=game_id,
-                screenshot=nth,
-                error=str(e),
-                exc_info=True,
-            )
-            raise RuntimeError(f"Failed to extract frame from video: {e}")
+        # Return a new BytesIO with the frame data
+        return io.BytesIO(stdout)
 
     def __getitem__(self, idx: str) -> schema.Game:
         """Get a game by ID.

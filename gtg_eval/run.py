@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 
 import argparse
+import asyncio
 import dataclasses
-import concurrent.futures
 import json
 import os
 import sqlite3
 import time
 
 import litellm
-import tqdm
+from tqdm.asyncio import tqdm_asyncio
 from loguru import logger
 
 from gtg_eval import dataset, evaluation, logging, schema, utils
@@ -118,10 +118,10 @@ class LLM:
         self.last_completion_tokens = 0
         self.last_total_tokens = 0
 
-    def completion(self, **kwargs):
+    async def completion(self, **kwargs):
         """Wrapper for litellm.completion that tracks token usage."""
         start_time = time.time()
-        response = litellm.completion(**self._kwargs, **kwargs)
+        response = await litellm.acompletion(**self._kwargs, **kwargs)
         elapsed = time.time() - start_time
 
         # Extract token usage
@@ -149,7 +149,7 @@ class LLM:
         return response
 
 
-def _run_game(
+async def _run_game(
     ds: dataset.Dataset,
     db_path: str,
     template: schema.PromptTemplate,
@@ -172,20 +172,22 @@ def _run_game(
             ckpt = _Checkpoint(state=schema.EvaluationState(game=game))
         else:
             logger.info(
-            "Resuming evaluation from checkpoint",
-            game_id=game_id,
-            guesses=len(ckpt.state.guesses),
-            previous_steps=len(ckpt.step_times),
-            prompt_tokens=ckpt.prompt_tokens,
-            completion_tokens=ckpt.completion_tokens,
-            total_tokens=ckpt.total_tokens,
-        )
+                "Resuming evaluation from checkpoint",
+                game_id=game_id,
+                guesses=len(ckpt.state.guesses),
+                previous_steps=len(ckpt.step_times),
+                prompt_tokens=ckpt.prompt_tokens,
+                completion_tokens=ckpt.completion_tokens,
+                total_tokens=ckpt.total_tokens,
+            )
 
         # Run evaluation steps until done
         while not ckpt.state.done:
             step_start_time = time.time()
             # Run the evaluation step
-            ckpt.state = evaluation.progress(ds, ckpt.state, template, llm.completion)
+            ckpt.state = await evaluation.progress(
+                ds, ckpt.state, template, llm.completion
+            )
             step_time = time.time() - step_start_time
             ckpt.step_times.append(step_time)
 
@@ -289,7 +291,7 @@ def _build_argparse():
     return parser
 
 
-def main():
+async def main():
     args = _build_argparse().parse_args()
     logging.setup_logging(level=args.log_level)
 
@@ -303,8 +305,8 @@ def main():
     try:
         ds = dataset.Dataset(args.dataset)
         logger.info("Loaded dataset", path=args.dataset, game_count=len(ds))
-    except Exception as e:
-        logger.error("Failed to load dataset", error=str(e), exc_info=True)
+    except Exception:
+        logger.exception("Failed to load dataset")
         return 1
 
     assert ds.validate()
@@ -324,8 +326,8 @@ def main():
         with open(args.prompt_template, "r") as f:
             template = schema.PromptTemplate.model_validate_json(f.read())
         logger.info("Loaded prompt template", path=args.prompt_template)
-    except Exception as e:
-        logger.error("Failed to load prompt template", error=str(e), exc_info=True)
+    except Exception:
+        logger.exception("Failed to load prompt template")
         return 1
 
     os.makedirs(os.path.dirname(args.checkpoint_db), exist_ok=True)
@@ -347,53 +349,50 @@ def main():
         ]
 
     traces = {}
-    futures_to_game_id = {}
 
     # Process games concurrently
-    try:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=args.concurrency
-        ) as executor:
-            logger.info("Submitting tasks to executor", workers=args.concurrency)
-            for game_id in valid_game_ids:
-                future = executor.submit(
-                    _run_game,
-                    ds,
-                    args.checkpoint_db,
-                    template,
-                    game_id,
-                    completion_kwargs,
+    limiter = asyncio.Semaphore(args.concurrency)
+    async with asyncio.TaskGroup() as tg:
+        tasks = []
+        for game_id in valid_game_ids:
+            tasks.append(
+                tg.create_task(
+                    utils.limited(
+                        limiter,
+                        _run_game,
+                        ds,
+                        args.checkpoint_db,
+                        template,
+                        game_id,
+                        completion_kwargs,
+                    )
                 )
-                futures_to_game_id[future] = game_id
+            )
 
-            logger.info("Waiting for tasks to complete", total_tasks=len(valid_game_ids))
-            # Process completed futures
-            i = 0
-            for future in tqdm.tqdm(
-                concurrent.futures.as_completed(futures_to_game_id),
-                total=len(valid_game_ids),
-                desc="Evaluating Games",
-            ):
-                game_id = futures_to_game_id[future]
-                trace = future.result()
-                traces[game_id] = trace
-                logger.info(
-                    "Game evaluation completed",
-                    game_id=game_id,
-                    solved=trace.solved,
-                    attempts=trace.attempts,
-                    same_franchise_at=trace.same_franchise_at,
-                    total_time=sum(trace.step_times),
-                    total_tokens=trace.total_tokens,
-                )
-                # Remove the periodic metric calculation, calculate once after all done.
-                if (i + 1) % 5 == 0:
-                    metrics = utils.calculate_metrics(traces)
-                    logger.info("Metrics till now", metrics=metrics, games_completed=i + 1)
-                i += 1
-    except KeyboardInterrupt:
-        logger.warning("Evaluation interrupted by user")
-        return 1
+        logger.info("Launched tasks", total_tasks=len(valid_game_ids))
+        # Process completed futures
+        i = 0
+        async for task in tqdm_asyncio(
+            asyncio.as_completed(tasks),
+            total=len(valid_game_ids),
+            desc="Evaluating Games",
+        ):
+            trace: schema.Trace = await task  # type: ignore
+            traces[trace.game_id] = trace
+            logger.info(
+                "Game evaluation completed",
+                game_id=trace.game_id,
+                solved=trace.solved,
+                attempts=trace.attempts,
+                same_franchise_at=trace.same_franchise_at,
+                total_time=sum(trace.step_times),
+                total_tokens=trace.total_tokens,
+            )
+            # Remove the periodic metric calculation, calculate once after all done.
+            if (i + 1) % 5 == 0:
+                metrics = utils.calculate_metrics(traces)
+                logger.info("Metrics till now", metrics=metrics, games_completed=i + 1)
+            i += 1
 
     if not traces:
         logger.warning("No traces were generated. Cannot calculate metrics.")
@@ -438,4 +437,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    exit(asyncio.run(main()))

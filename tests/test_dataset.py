@@ -50,28 +50,32 @@ class TestDatasetAccess:
 
 
 class TestScreenshotRetrieval:
-    def test_screenshot_of_with_image(self, real_dataset):
-        screenshot = real_dataset.screenshot_of("33", 1)
+    @pytest.mark.asyncio
+    async def test_screenshot_of_with_image(self, real_dataset):
+        screenshot = await real_dataset.screenshot_of("33", 1)
         assert screenshot.read() is not None
-        screenshot = real_dataset.screenshot_of("33", 6)
+        screenshot = await real_dataset.screenshot_of("33", 6)
         assert screenshot.read() is not None
-        video = real_dataset.screenshot_of("888", 6, allow_video=True)
+        video = await real_dataset.screenshot_of("888", 6, allow_video=True)
         assert video.read() is not None
 
-    def test_extract_video_frame(self, real_dataset):
-        video_frame = real_dataset.screenshot_of("888", 6, allow_video=False)
+    @pytest.mark.asyncio
+    async def test_extract_video_frame(self, real_dataset):
+        video_frame = await real_dataset.screenshot_of("888", 6, allow_video=False)
         assert video_frame.read() is not None
 
-    def test_screenshot_of_nonexistent(self, real_dataset):
+    @pytest.mark.asyncio
+    async def test_screenshot_of_nonexistent(self, real_dataset):
         with pytest.raises(FileNotFoundError):
-            real_dataset.screenshot_of("bruh", 4)
+            await real_dataset.screenshot_of("bruh", 4)
 
-    def test_screenshot_of_invalid_number(self, real_dataset):
+    @pytest.mark.asyncio
+    async def test_screenshot_of_invalid_number(self, real_dataset):
         with pytest.raises(ValueError):
-            real_dataset.screenshot_of("1", 0)  # Too low
+            await real_dataset.screenshot_of("1", 0)  # Too low
 
         with pytest.raises(ValueError):
-            real_dataset.screenshot_of("1", 7)  # Too high
+            await real_dataset.screenshot_of("1", 7)  # Too high
 
 
 class TestDatasetValidation:

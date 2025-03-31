@@ -6,16 +6,19 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "datasets>=3.5.0",
+    "httpx>=0.28.1",
     "litellm>=1.65.0",
     "loguru>=0.7.3",
     "pydantic>=2.11.1",
     "requests>=2.32.3",
+    "tenacity>=9.0.0",
     "tqdm>=4.67.1",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3.5",
+    "pytest-asyncio>=0.26.0",
 ]
 
 [tool.pytest.ini_options]

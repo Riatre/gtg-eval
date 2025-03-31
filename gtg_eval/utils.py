@@ -1,3 +1,4 @@
+import asyncio
 import re
 
 from gtg_eval import schema
@@ -129,3 +130,8 @@ def calculate_metrics(traces: dict[str, schema.Trace]) -> schema.Metrics:
     )
 
     return schema.Metrics(**metrics)
+
+
+async def limited(limiter: asyncio.Semaphore, func, *args, **kwargs):
+    async with limiter:
+        return await func(*args, **kwargs)
