@@ -15,6 +15,10 @@ from loguru import logger
 from gtg_eval import dataset, evaluation, logging, schema, utils
 
 
+# Gemini models do no support seed=.
+litellm.drop_params = True
+
+
 @dataclasses.dataclass
 class _Checkpoint:
     state: schema.EvaluationState
@@ -341,6 +345,7 @@ async def main():
         "model": args.model,
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,
+        "seed": 1337,
     }
 
     # Add Gemini-specific safety settings if needed
