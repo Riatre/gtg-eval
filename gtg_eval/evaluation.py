@@ -89,6 +89,8 @@ class _TitleCache:
         Returns:
             A NormalizedAnswer tuple if found, None otherwise
         """
+        if query is not str:
+            return None
         cursor = self.conn.cursor()
         cursor.execute(
             "SELECT name, franchise FROM game_titles WHERE query_lower = ?",
@@ -109,6 +111,8 @@ class _TitleCache:
             name: The game title name
             franchise: The franchise name or None
         """
+        if query is not str:
+            return
         cursor = self.conn.cursor()
         cursor.execute(
             "INSERT OR REPLACE INTO game_titles (query_lower, name, franchise) VALUES (?, ?, ?)",
@@ -326,6 +330,8 @@ def progress(
     model_message = response.choices[0].message
     assert model_message.role == "assistant"
     content = model_message.content
+    if not content:
+        content = ""
 
     # Extract the game name from the response
     logger.info("Model response message", content=content)

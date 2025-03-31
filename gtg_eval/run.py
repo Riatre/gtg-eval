@@ -152,13 +152,13 @@ def sanitize_messages_for_trace(messages: list[dict], game_id: str) -> list[dict
     sanitized = []
     image_pattern = re.compile(r'data:image/[^;]+;base64,[^"]+"')
 
+    image_num = 1
     for msg in messages:
         sanitized_msg = msg.copy()
 
         # Handle content field which could be a string or a list of content blocks
         if isinstance(msg.get("content"), list):
             sanitized_content = []
-            image_num = 1
             for block in msg["content"]:
                 if isinstance(block, dict) and block.get("type") == "image_url":
                     # Replace base64 data with URL
