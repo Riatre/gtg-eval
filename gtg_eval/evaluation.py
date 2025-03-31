@@ -217,7 +217,7 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
 
 
 def judge(game: schema.Game, normalized: NormalizedAnswer) -> schema.Verdict:
-    if normalized.name in game.answers:
+    if normalized.name.lower() in (x.lower() for x in game.answers):
         return schema.Verdict.CORRECT
     if (
         game.franchise
