@@ -12,6 +12,7 @@ from gtg_eval.evaluation import (
     judge,
     build_next_prompt,
     progress,
+    normalize_title,
 )
 from gtg_eval import schema, dataset
 
@@ -510,3 +511,32 @@ def test_progress_with_done_state(test_dataset, test_template, test_game):
     # Run progress with mock completion should raise AssertionError
     with pytest.raises(AssertionError):
         progress(test_dataset, state, test_template, mock_completion)
+
+
+@pytest.mark.parametrize(
+    "input_title,expected_output",
+    [
+        ("Overcooked! 2", "overcooked 2"),
+        ("Pokémon Scarlet", "pokemon scarlet"),
+        ("God of War", "god of war"),
+        ("Assassin's Creed", "assassin's creed"),
+        ("SUPER MARIO BROS.", "super mario bros"),
+        ("Half-Life 2", "half-life 2"),
+        (
+            "The Legend of Zelda: Breath of the Wild",
+            "the legend of zelda breath of the wild",
+        ),
+        ("Tony Hawk's Pro Skater", "tony hawk's pro skater"),
+        ("F.E.A.R.", "fear"),
+        ("Metal Gear Solid 3: Snake Eater", "metal gear solid 3 snake eater"),
+        ("Sid Meier's Civilization VI", "sid meier's civilization vi"),
+        ("Elden Ring (Extended Edition)", "elden ring extended edition"),
+        ("Resident Evil 7: Biohazard", "resident evil 7 biohazard"),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_normalize_title(input_title, expected_output):
+    """Test that normalize_title properly cleans game titles."""
+    result = normalize_title(input_title)
+    assert result == expected_output

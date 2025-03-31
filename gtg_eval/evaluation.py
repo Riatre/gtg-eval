@@ -3,6 +3,7 @@ import collections
 import pathlib
 import re
 import sqlite3
+import unicodedata
 
 import litellm.types.llms.openai as litellm_openai
 import requests
@@ -20,6 +21,47 @@ def parse_answer(completion: str):
     if answer is None:
         return None
     return answer.group(1)
+
+
+def normalize_title(title: str) -> str:
+    """Normalize a game title string.
+
+    This function:
+    - Converts title to lowercase
+    - Removes special characters like '!', '?', etc.
+    - Normalizes quotes (both single and double)
+    - Converts accented characters to their ASCII equivalents
+    - Normalizes whitespace
+
+    Args:
+        title: The game title to normalize
+
+    Returns:
+        A normalized version of the title
+    """
+    if not title:
+        return ""
+
+    # Convert to lowercase
+    result = str(title).lower()
+
+    # Normalize unicode characters (accented characters to ASCII)
+    result = (
+        unicodedata.normalize("NFKD", result).encode("ASCII", "ignore").decode("ASCII")
+    )
+
+    # Replace full-width quotes with standard quotes
+    result = (
+        result.replace(""", "'").replace(""", "'").replace('"', '"').replace('"', '"')
+    )
+
+    # Remove special characters like !, ?, etc.
+    result = re.sub(r"[!?:;&@#$%^*()+=\[\]{}<>|/\\~`\.]", "", result)
+
+    # Normalize whitespace (replace multiple spaces with single space)
+    result = re.sub(r"\s+", " ", result).strip()
+
+    return result
 
 
 def _setup_api_session():
@@ -73,7 +115,7 @@ class _TitleCache:
         cursor = self.conn.cursor()
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS game_titles (
-            query_lower TEXT PRIMARY KEY,
+            query_normalized TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             franchise TEXT
         )
@@ -89,12 +131,13 @@ class _TitleCache:
         Returns:
             A NormalizedAnswer tuple if found, None otherwise
         """
-        if query is not str:
+        if not isinstance(query, str):
             return None
+
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT name, franchise FROM game_titles WHERE query_lower = ?",
-            (query.lower(),),
+            "SELECT name, franchise FROM game_titles WHERE query_normalized = ?",
+            (normalize_title(query),),
         )
         result = cursor.fetchone()
 
@@ -111,12 +154,12 @@ class _TitleCache:
             name: The game title name
             franchise: The franchise name or None
         """
-        if query is not str:
+        if not isinstance(query, str):
             return
         cursor = self.conn.cursor()
         cursor.execute(
-            "INSERT OR REPLACE INTO game_titles (query_lower, name, franchise) VALUES (?, ?, ?)",
-            (query.lower(), name, franchise),
+            "INSERT OR REPLACE INTO game_titles (query_normalized, name, franchise) VALUES (?, ?, ?)",
+            (normalize_title(query), name, franchise),
         )
         self.conn.commit()
 
@@ -131,7 +174,7 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
     if not query:
         return NormalizedAnswer(name=query, franchise=None)
 
-    # Check cache first (using lower case key)
+    # Check cache first (using normalized query)
     cached_result = _title_cache.get(query)
     if cached_result:
         logger.debug(
@@ -141,12 +184,15 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
         )
         return cached_result
 
-    # Prepare API request
+    # Normalize the query
+    normalized_query = normalize_title(query)
+
+    # Prepare API request - use original query for API
     base_url = "https://api.guessthe.game/api/autocomplete/"
     params = {"q": query, "item_type": "game", "puzzle_type": "gtg", "pnum": 0}
 
     try:
-        logger.debug("Querying franchise API", query=query)
+        logger.debug("Querying franchise API", query=query, normalized=normalized_query)
         response = _api_session.get(base_url, params=params, timeout=10)
         # raise_for_status is handled by the retry mechanism
 
@@ -166,17 +212,20 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
                 if not title:
                     continue
 
-                # Cache this result regardless of match
+                # Cache this result using normalized title
                 _title_cache.put(title, title, franchise)
                 logger.debug("Added to cache", franchise=franchise, title=title)
 
-                # Check for exact case-insensitive match with the original query
-                if title.lower() == query.lower():
+                # Check for exact match with the normalized query
+                normalized_title = normalize_title(title)
+                if normalized_title == normalized_query:
                     matched = NormalizedAnswer(name=title, franchise=franchise)
                     logger.info(
                         "Found exact match",
                         query=query,
+                        normalized=normalized_query,
                         title=title,
+                        normalized_title=normalized_title,
                         franchise=franchise,
                     )
                     # Continue caching other results but keep this franchise
@@ -186,6 +235,7 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
                 logger.warning(
                     "No exact title match found in API results",
                     query=query,
+                    normalized=normalized_query,
                     results=results,
                     results_count=len(results),
                 )
@@ -198,6 +248,7 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
             logger.warning(
                 "No results found or API status not ok",
                 query=query,
+                normalized=normalized_query,
                 status=data.get("status"),
                 results_count=len(data.get("results", [])),
             )
@@ -221,7 +272,12 @@ def normalize_answer(answer: str) -> NormalizedAnswer:
 
 
 def judge(game: schema.Game, normalized: NormalizedAnswer) -> schema.Verdict:
-    if normalized.name.lower() in (x.lower() for x in game.answers):
+    # Normalize all game answers
+    normalized_game_answers = [normalize_title(answer) for answer in game.answers]
+    # Normalize the submitted answer
+    normalized_answer_name = normalize_title(normalized.name)
+
+    if normalized_answer_name in normalized_game_answers:
         return schema.Verdict.CORRECT
     if (
         game.franchise
@@ -327,9 +383,14 @@ def progress(
     response = completion(messages=messages)
     logger.debug("Model response", response=response)
 
-    model_message = response.choices[0].message
-    assert model_message.role == "assistant"
-    content = model_message.content
+    if isinstance(response, dict):
+        model_message = response["choices"][0]["message"]
+        assert model_message["role"] == "assistant"
+        content = model_message["content"]
+    else:
+        model_message = response.choices[0].message
+        assert model_message.role == "assistant"
+        content = model_message.content
     if not content:
         content = ""
 
@@ -356,7 +417,12 @@ def progress(
     new_state = schema.EvaluationState(
         game=state.game,
         guesses=state.guesses.copy() + [new_guess],
-        messages=messages + [model_message.model_dump()],
+        messages=messages
+        + [
+            model_message.model_dump()
+            if not isinstance(model_message, dict)
+            else model_message
+        ],
     )
 
     logger.info(
