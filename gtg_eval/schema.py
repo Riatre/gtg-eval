@@ -1,7 +1,7 @@
+import enum
 from typing import Any
 
 import pydantic
-import enum
 
 
 class Game(pydantic.BaseModel):
@@ -37,13 +37,13 @@ class EvaluationState(pydantic.BaseModel):
     def done(self) -> bool:
         return (
             len(self.guesses) >= 6
-            or self.guesses
+            or len(self.guesses) > 0
             and self.guesses[-1].verdict == Verdict.CORRECT
         )
 
     @property
     def solved(self) -> bool:
-        return self.guesses and self.guesses[-1].verdict == Verdict.CORRECT
+        return len(self.guesses) > 0 and self.guesses[-1].verdict == Verdict.CORRECT
 
     @property
     def attempts(self) -> int:

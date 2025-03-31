@@ -4,13 +4,14 @@ import pathlib
 import re
 import sqlite3
 import unicodedata
+from typing import Callable
 
 import litellm.types.llms.openai as litellm_openai
 import requests
+from loguru import logger
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from loguru import logger
 from gtg_eval import dataset, schema
 
 NormalizedAnswer = collections.namedtuple("NormalizedAnswer", ["name", "franchise"])
@@ -348,7 +349,7 @@ def progress(
     dataset: dataset.Dataset,
     state: schema.EvaluationState,
     template: schema.PromptTemplate,
-    completion: callable,
+    completion: Callable,
 ) -> schema.EvaluationState:
     """Run one step in the evaluation process.
 
