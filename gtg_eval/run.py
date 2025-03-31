@@ -2,6 +2,7 @@
 
 import argparse
 import dataclasses
+import concurrent.futures
 import json
 import os
 import re
@@ -60,8 +61,9 @@ def setup_checkpoint_db(db_path: str) -> sqlite3.Connection:
     Returns:
         SQLite connection object
     """
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     cursor = conn.cursor()
+    conn.execute("PRAGMA journal_mode=WAL")
 
     # Create table for storing evaluation states if it doesn't exist
     cursor.execute("""
@@ -272,23 +274,28 @@ class LLM:
 
 
 def _run_game(
-    llm: LLM,
     ds: dataset.Dataset,
-    conn: sqlite3.Connection,
+    db_path: str,
     template: schema.PromptTemplate,
     game_id: str,
+    completion_kwargs: dict,
 ) -> schema.Trace:
     game = ds[game_id]
     logger.info("Processing game", game_id=game_id)
 
-    # Check if we have a checkpoint for this game
-    ckpt = load_checkpoint(conn, game_id)
+    # Each thread needs its own DB connection and LLM instance
+    conn = setup_checkpoint_db(db_path)
+    llm = LLM(**completion_kwargs)
 
-    if ckpt is None:
-        # Initialize new state
-        ckpt = _Checkpoint(state=schema.EvaluationState(game=game))
-    else:
-        logger.info(
+    try:
+        # Check if we have a checkpoint for this game
+        ckpt = load_checkpoint(conn, game_id)
+
+        if ckpt is None:
+            # Initialize new state
+            ckpt = _Checkpoint(state=schema.EvaluationState(game=game))
+        else:
+            logger.info(
             "Resuming evaluation from checkpoint",
             game_id=game_id,
             guesses=len(ckpt.state.guesses),
@@ -298,53 +305,54 @@ def _run_game(
             total_tokens=ckpt.total_tokens,
         )
 
-    # Run evaluation steps until done
-    while not ckpt.state.done:
-        step_start_time = time.time()
-        # Run the evaluation step
-        ckpt.state = evaluation.progress(ds, ckpt.state, template, llm.completion)
-        step_time = time.time() - step_start_time
-        ckpt.step_times.append(step_time)
+        # Run evaluation steps until done
+        while not ckpt.state.done:
+            step_start_time = time.time()
+            # Run the evaluation step
+            ckpt.state = evaluation.progress(ds, ckpt.state, template, llm.completion)
+            step_time = time.time() - step_start_time
+            ckpt.step_times.append(step_time)
 
-        # Update token usage from the token tracker
-        ckpt.prompt_tokens += llm.last_prompt_tokens
-        ckpt.completion_tokens += llm.last_completion_tokens
-        ckpt.total_tokens += llm.last_total_tokens
+            # Update token usage from the token tracker
+            ckpt.prompt_tokens += llm.last_prompt_tokens
+            ckpt.completion_tokens += llm.last_completion_tokens
+            ckpt.total_tokens += llm.last_total_tokens
 
-        # Save checkpoint after each step
-        save_checkpoint(conn, game_id, ckpt)
+            save_checkpoint(conn, game_id, ckpt)
 
-        logger.trace(
-            "Evaluation step completed",
-            game_id=game_id,
-            step=len(ckpt.state.guesses),
-            step_time=step_time,
-            verdict=ckpt.state.guesses[-1].verdict if ckpt.state.guesses else None,
-            step_tokens=llm.last_total_tokens,
+            logger.trace(
+                "Evaluation step completed",
+                game_id=game_id,
+                step=len(ckpt.state.guesses),
+                step_time=step_time,
+                verdict=ckpt.state.guesses[-1].verdict if ckpt.state.guesses else None,
+                step_tokens=llm.last_total_tokens,
+            )
+
+        # Remove the raw messages from the state and replace with sanitized messages
+        sanitized_state = ckpt.state.model_copy(
+            update={"messages": sanitize_messages_for_trace(ckpt.state.messages, game_id)}
         )
 
-    # Remove the raw messages from the state and replace with sanitized messages
-    sanitized_state = ckpt.state.model_copy(
-        update={"messages": sanitize_messages_for_trace(ckpt.state.messages, game_id)}
-    )
+        avg_step_time = (
+            sum(ckpt.step_times) / len(ckpt.step_times) if ckpt.step_times else 0
+        )
 
-    avg_step_time = (
-        sum(ckpt.step_times) / len(ckpt.step_times) if ckpt.step_times else 0
-    )
-
-    return schema.Trace(
-        game_id=game_id,
-        final_state=sanitized_state,
-        total_time=sum(ckpt.step_times),
-        step_times=ckpt.step_times,
-        average_step_time=avg_step_time,
-        prompt_tokens=ckpt.prompt_tokens,
-        completion_tokens=ckpt.completion_tokens,
-        total_tokens=ckpt.total_tokens,
-        solved=ckpt.state.solved,
-        attempts=ckpt.state.attempts,
-        same_franchise_at=ckpt.state.same_franchise_at,
-    )
+        return schema.Trace(
+            game_id=game_id,
+            final_state=sanitized_state,
+            total_time=sum(ckpt.step_times),
+            step_times=ckpt.step_times,
+            average_step_time=avg_step_time,
+            prompt_tokens=ckpt.prompt_tokens,
+            completion_tokens=ckpt.completion_tokens,
+            total_tokens=ckpt.total_tokens,
+            solved=ckpt.state.solved,
+            attempts=ckpt.state.attempts,
+            same_franchise_at=ckpt.state.same_franchise_at,
+        )
+    finally:
+        conn.close()  # Ensure connection is closed in this thread
 
 
 def _build_argparse():
@@ -401,6 +409,12 @@ def _build_argparse():
         default=4096,
         help="Maximum number of tokens in the response (default: 4096)",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of concurrent evaluation workers (default: 1)",
+    )
     return parser
 
 
@@ -443,12 +457,7 @@ def main():
         logger.error("Failed to load prompt template", error=str(e), exc_info=True)
         return 1
 
-    try:
-        conn = setup_checkpoint_db(args.checkpoint_db)
-        logger.info("Connected to checkpoint database", path=args.checkpoint_db)
-    except Exception as e:
-        logger.error("Failed to setup checkpoint database", error=str(e), exc_info=True)
-        return 1
+    os.makedirs(os.path.dirname(args.checkpoint_db), exist_ok=True)
 
     # Prepare completion function with model-specific settings
     completion_kwargs = {
@@ -466,29 +475,59 @@ def main():
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ]
 
-    llm = LLM(**completion_kwargs)
     traces = {}
+    futures_to_game_id = {}
 
-    # Process each game
+    # Process games concurrently
     try:
-        for i, game_id in enumerate(tqdm.tqdm(valid_game_ids)):
-            traces[game_id] = trace = _run_game(llm, ds, conn, template, game_id)
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=args.concurrency
+        ) as executor:
+            logger.info("Submitting tasks to executor", workers=args.concurrency)
+            for game_id in valid_game_ids:
+                future = executor.submit(
+                    _run_game,
+                    ds,
+                    args.checkpoint_db,
+                    template,
+                    game_id,
+                    completion_kwargs,
+                )
+                futures_to_game_id[future] = game_id
 
-            logger.info(
-                "Game evaluation completed",
-                game_id=game_id,
-                solved=trace.solved,
-                attempts=trace.attempts,
-                same_franchise_at=trace.same_franchise_at,
-                total_time=sum(trace.step_times),
-            )
-
-            if i > 0 and (i + 1) % 5 == 0:
-                metrics = calculate_metrics(traces)
-                logger.info("Metrics till now", metrics=metrics, games_completed=i + 1)
+            logger.info("Waiting for tasks to complete", total_tasks=len(valid_game_ids))
+            # Process completed futures
+            i = 0
+            for future in tqdm.tqdm(
+                concurrent.futures.as_completed(futures_to_game_id),
+                total=len(valid_game_ids),
+                desc="Evaluating Games",
+            ):
+                game_id = futures_to_game_id[future]
+                trace = future.result()
+                traces[game_id] = trace
+                logger.info(
+                    "Game evaluation completed",
+                    game_id=game_id,
+                    solved=trace.solved,
+                    attempts=trace.attempts,
+                    same_franchise_at=trace.same_franchise_at,
+                    total_time=sum(trace.step_times),
+                    total_tokens=trace.total_tokens,
+                )
+                # Remove the periodic metric calculation, calculate once after all done.
+                if (i + 1) % 5 == 0:
+                    metrics = calculate_metrics(traces)
+                    logger.info("Metrics till now", metrics=metrics, games_completed=i + 1)
+                i += 1
     except KeyboardInterrupt:
         logger.warning("Evaluation interrupted by user")
         return 1
+
+    if not traces:
+        logger.warning("No traces were generated. Cannot calculate metrics.")
+        return 1
+
     metrics = calculate_metrics(traces)
     logger.info("Final metrics", metrics=metrics)
 
