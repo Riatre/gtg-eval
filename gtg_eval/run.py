@@ -293,7 +293,11 @@ def _build_argparse():
 
 async def main():
     args = _build_argparse().parse_args()
-    logging.setup_logging(level=args.log_level)
+    logging.setup_logging(
+        term=lambda msg: tqdm_asyncio.write(msg, end=""),
+        level=args.log_level,
+        colorize=True,
+    )
 
     # if not litellm.supports_vision(model=args.model):
     #     logger.error("Model does not support vision", model=args.model)

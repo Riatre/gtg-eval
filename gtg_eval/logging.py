@@ -3,7 +3,7 @@ import os
 import sys
 
 
-def setup_logging(level="INFO"):
+def setup_logging(term=sys.stderr, level="INFO", colorize=None):
     """Configure loguru logger with the specified level.
 
     Args:
@@ -28,5 +28,5 @@ def setup_logging(level="INFO"):
         "<level>{message}</level> | "
         "{extra}"
     )
-    logger.add(sys.stderr, format=logger_format, level=level)
+    logger.add(term, format=logger_format, level=level, colorize=colorize)
     return logger
