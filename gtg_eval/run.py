@@ -125,7 +125,7 @@ class LLM:
     async def completion(self, **kwargs):
         """Wrapper for litellm.completion that tracks token usage."""
         start_time = time.time()
-        response = await litellm.acompletion(**self._kwargs, **kwargs)
+        response = await litellm.acompletion(max_retries=5, **self._kwargs, **kwargs)
         elapsed = time.time() - start_time
 
         # Extract token usage
