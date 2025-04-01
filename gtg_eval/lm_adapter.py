@@ -1,5 +1,6 @@
-import time
 import enum
+import os
+import time
 from typing import Any, Protocol
 
 import litellm
@@ -18,7 +19,20 @@ class LMAdapter(Protocol):
     async def completion(self, **kwargs) -> Any: ...
 
 
-class LiteLLM:
+class LastTokenUsageMixin:
+    def _update_token_usage(self, response: Any):
+        self.last_prompt_tokens = 0
+        self.last_completion_tokens = 0
+        self.last_total_tokens = 0
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        self.last_prompt_tokens = getattr(usage, "prompt_tokens", 0)
+        self.last_completion_tokens = getattr(usage, "completion_tokens", 0)
+        self.last_total_tokens = self.last_prompt_tokens + self.last_completion_tokens
+
+
+class LiteLLM(LastTokenUsageMixin):
     def __init__(self, **kwargs):
         # if not litellm.supports_vision(model=kwargs["model"]):
         #     logger.error("Model does not support vision", model=kwargs["model"])
@@ -45,47 +59,59 @@ class LiteLLM:
             ]
 
         self._kwargs = kwargs
-        self.last_prompt_tokens = 0
-        self.last_completion_tokens = 0
-        self.last_total_tokens = 0
 
     async def completion(self, **kwargs):
         """Wrapper for litellm.completion that tracks token usage."""
         start_time = time.time()
         response = await litellm.acompletion(max_retries=5, **self._kwargs, **kwargs)
         elapsed = time.time() - start_time
-
-        # Extract token usage
-        prompt_tokens = 0
-        completion_tokens = 0
-        if usage := getattr(response, "usage", None):
-            prompt_tokens = getattr(usage, "prompt_tokens", 0)
-            completion_tokens = getattr(usage, "completion_tokens", 0)
-        total_tokens = prompt_tokens + completion_tokens
-
-        # Update token tracker
-        self.last_prompt_tokens = prompt_tokens
-        self.last_completion_tokens = completion_tokens
-        self.last_total_tokens = total_tokens
-
-        # Log token usage
+        self._update_token_usage(response)
         logger.info(
             "Completion finished",
             elapsed_seconds=elapsed,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
+            prompt_tokens=self.last_prompt_tokens,
+            completion_tokens=self.last_completion_tokens,
+            total_tokens=self.last_total_tokens,
+        )
+        return response
+
+
+class VolcEngineBatch(LastTokenUsageMixin):
+    def __init__(self, **kwargs):
+        from volcenginesdkarkruntime import AsyncArk
+
+        kwargs.pop("seed", None)
+        self._kwargs = kwargs
+        self.client = AsyncArk(
+            api_key=os.environ.get("ARK_API_KEY"), timeout=60 * 60 * 3
         )
 
+    async def completion(self, **kwargs):
+        start_time = time.time()
+        kwargs.pop("seed", None)
+        response = await self.client.batch_chat.completions.create(
+            **self._kwargs, **kwargs
+        )
+        elapsed = time.time() - start_time
+        self._update_token_usage(response)
+        logger.info(
+            "Completion finished",
+            elapsed_seconds=elapsed,
+            prompt_tokens=self.last_prompt_tokens,
+            completion_tokens=self.last_completion_tokens,
+            total_tokens=self.last_total_tokens,
+        )
         return response
 
 
 class AdapterType(enum.StrEnum):
     LITELLM = "litellm"
+    VOLCENGINE_BATCH = "volcengine_batch"
 
 
 _TYPE_TO_CLASS = {
     AdapterType.LITELLM: LiteLLM,
+    AdapterType.VOLCENGINE_BATCH: VolcEngineBatch,
 }
 
 
