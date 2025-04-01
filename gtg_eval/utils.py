@@ -1,5 +1,10 @@
 import asyncio
+import functools
+import inspect
 import re
+from typing import Any, Callable
+
+import typer
 
 from gtg_eval import schema
 
@@ -135,3 +140,26 @@ def calculate_metrics(traces: dict[str, schema.Trace]) -> schema.Metrics:
 async def limited(limiter: asyncio.Semaphore, func, *args, **kwargs):
     async with limiter:
         return await func(*args, **kwargs)
+
+
+class AsyncTyper(typer.Typer):
+    @staticmethod
+    def maybe_run_async(decorator: Callable, func: Callable) -> Any:
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            def runner(*args: Any, **kwargs: Any) -> Any:
+                return asyncio.run(func(*args, **kwargs))
+
+            decorator(runner)
+        else:
+            decorator(func)
+        return func
+
+    def callback(self, *args: Any, **kwargs: Any) -> Any:
+        decorator = super().callback(*args, **kwargs)
+        return functools.partial(self.maybe_run_async, decorator)
+
+    def command(self, *args: Any, **kwargs: Any) -> Any:
+        decorator = super().command(*args, **kwargs)
+        return functools.partial(self.maybe_run_async, decorator)

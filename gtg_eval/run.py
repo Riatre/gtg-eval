@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 
-import argparse
 import asyncio
 import dataclasses
 import json
 import os
 import sqlite3
 import time
+from typing import Annotated
 
+import typer
 from loguru import logger
 from tqdm.asyncio import tqdm_asyncio
 
@@ -190,89 +191,34 @@ async def _run_game(
         conn.close()  # Ensure connection is closed in this thread
 
 
-def _build_argparse():
-    parser = argparse.ArgumentParser(description="Run GTG evaluation")
-    parser.add_argument(
-        "--dataset", type=str, required=True, help="Path to dataset directory"
-    )
-    parser.add_argument(
-        "--game-ids",
-        type=str,
-        required=True,
-        help="Comma-separated game IDs or ranges (e.g., '1,3,55-77')",
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        required=True,
-        help="Model name for litellm (e.g., 'openai/gpt-4-vision-preview')",
-    )
-    parser.add_argument(
-        "--checkpoint-db",
-        type=str,
-        required=True,
-        help="Path to checkpoint SQLite database",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        required=True,
-        help="Path to output JSON file for traces",
-    )
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="Logging level",
-    )
-    parser.add_argument(
-        "--prompt-template",
-        type=str,
-        default="prompt_template/english-v3.json",
-        help="Path to prompt template JSON file",
-    )
-    parser.add_argument(
-        "--temperature",
-        type=float,
-        default=0.7,
-        help="Temperature for model sampling (default: 0.7)",
-    )
-    parser.add_argument(
-        "--max-tokens",
-        type=int,
-        default=4096,
-        help="Maximum number of tokens in the response (default: 4096)",
-    )
-    parser.add_argument(
-        "--concurrency",
-        type=int,
-        default=1,
-        help="Number of concurrent evaluation workers (default: 1)",
-    )
-    parser.add_argument(
-        "--adapter-type",
-        type=lm_adapter.AdapterType,
-        default=lm_adapter.AdapterType.LITELLM,
-        help="Adapter type (default: litellm)",
-    )
-    return parser
-
-
-async def main():
-    args = _build_argparse().parse_args()
+async def main(
+    dataset_path: Annotated[str, typer.Option("--dataset", help="Path to dataset dir")],
+    game_ids: Annotated[
+        str, typer.Option(help="Comma-separated game IDs or ranges (e.g., '1,3,55-77')")
+    ],
+    model: Annotated[str, typer.Option(help="Model name (e.g., 'gpt-4o')")],
+    checkpoint_db: Annotated[str, typer.Option(help="Path to checkpoint")],
+    output: Annotated[str, typer.Option(help="Path to output traces JSON file")],
+    prompt_template: Annotated[
+        str, typer.Option(help="Path to prompt template JSON file")
+    ] = "prompt_template/english-v3.json",
+    temperature: Annotated[float, typer.Option(help="Sampling temperature")] = 0.7,
+    max_tokens: Annotated[int, typer.Option(help="Max number of output tokens")] = 4096,
+    concurrency: Annotated[int, typer.Option(help="Number of concurrent workers")] = 1,
+    adapter_type: Annotated[
+        lm_adapter.AdapterType, typer.Option()
+    ] = lm_adapter.AdapterType.LITELLM,
+) -> int:
     logging.setup_logging(
-        term=lambda msg: tqdm_asyncio.write(msg, end=""),
-        level=args.log_level,
-        colorize=True,
+        term=lambda msg: tqdm_asyncio.write(msg, end=""), colorize=True
     )
 
-    game_ids = utils.parse_id_range(args.game_ids)
-    logger.info("games to evaluate", count=len(game_ids))
+    game_ids_list = utils.parse_id_range(game_ids)
+    logger.info("games to evaluate", count=len(game_ids_list))
 
     try:
-        ds = dataset.Dataset(args.dataset)
-        logger.info("Loaded dataset", path=args.dataset, game_count=len(ds))
+        ds = dataset.Dataset(dataset_path)
+        logger.info("Loaded dataset", path=dataset_path, game_count=len(ds))
     except Exception:
         logger.exception("Failed to load dataset")
         return 1
@@ -280,9 +226,9 @@ async def main():
     assert ds.validate()
 
     # Filter game IDs to those that exist in the dataset
-    valid_game_ids = [gid for gid in game_ids if gid in ds.games]
-    if len(valid_game_ids) != len(game_ids):
-        missing = set(game_ids) - set(valid_game_ids)
+    valid_game_ids = [gid for gid in game_ids_list if gid in ds.games]
+    if len(valid_game_ids) != len(game_ids_list):
+        missing = set(game_ids_list) - set(valid_game_ids)
         logger.error("Some game IDs not found in dataset", missing=list(missing))
         return 1
 
@@ -291,27 +237,27 @@ async def main():
         return 1
 
     try:
-        with open(args.prompt_template, "r") as f:
+        with open(prompt_template, "r") as f:
             template = schema.PromptTemplate.model_validate_json(f.read())
-        logger.info("Loaded prompt template", path=args.prompt_template)
+        logger.info("Loaded prompt template", path=prompt_template)
     except Exception:
         logger.exception("Failed to load prompt template")
         return 1
 
-    os.makedirs(os.path.dirname(args.checkpoint_db), exist_ok=True)
+    os.makedirs(os.path.dirname(checkpoint_db), exist_ok=True)
 
     # Prepare completion function with model-specific settings
     completion_kwargs = {
-        "model": args.model,
-        "temperature": args.temperature,
-        "max_tokens": args.max_tokens,
+        "model": model,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
         "seed": 1337,
     }
 
     traces = {}
 
     # Process games concurrently
-    limiter = asyncio.Semaphore(args.concurrency)
+    limiter = asyncio.Semaphore(concurrency)
     async with asyncio.TaskGroup() as tg:
         tasks = []
         for game_id in valid_game_ids:
@@ -321,10 +267,10 @@ async def main():
                         limiter,
                         _run_game,
                         ds,
-                        args.checkpoint_db,
+                        checkpoint_db,
                         template,
                         game_id,
-                        args.adapter_type,
+                        adapter_type,
                         completion_kwargs,
                     )
                 )
@@ -363,7 +309,7 @@ async def main():
     logger.info("Final metrics", metrics=metrics)
 
     # Write traces to output file
-    output_dir = os.path.dirname(args.output)
+    output_dir = os.path.dirname(output)
     os.makedirs(output_dir, exist_ok=True)
 
     total_prompt_tokens = 0
@@ -374,12 +320,12 @@ async def main():
         total_completion_tokens += trace_obj.completion_tokens
         total_tokens_used += trace_obj.total_tokens
 
-    output = schema.Output(
+    out = schema.Output(
         metadata=schema.EvalMetadata(
-            model=args.model,
+            model=model,
             model_params=completion_kwargs,
             prompt=template,
-            dataset=args.dataset,
+            dataset=dataset_path,
             timestamp=time.time(),
             games_count=len(traces),
             prompt_tokens=total_prompt_tokens,
@@ -390,12 +336,14 @@ async def main():
         traces=traces,
     )
 
-    with open(args.output, "w") as f:
-        f.write(output.model_dump_json(indent=2))
+    with open(output, "w") as f:
+        f.write(out.model_dump_json(indent=2))
 
-    logger.info("Wrote traces to output file", path=args.output)
+    logger.info("Wrote traces to output file", path=output)
     return 0
 
 
 if __name__ == "__main__":
-    exit(asyncio.run(main()))
+    app = utils.AsyncTyper(add_completion=False)
+    app.command()(main)
+    app()
