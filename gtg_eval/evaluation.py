@@ -16,7 +16,7 @@ NormalizedAnswer = collections.namedtuple("NormalizedAnswer", ["name", "franchis
 
 
 def parse_answer(completion: str):
-    answer = re.search(r"<name>(.+?)</name>", completion)
+    answer = re.search(r"<answer>(.+?)</answer>", completion)
     if answer is None:
         return None
     return answer.group(1)

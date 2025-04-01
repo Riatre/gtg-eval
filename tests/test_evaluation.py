@@ -20,17 +20,17 @@ from gtg_eval import schema, dataset
 @pytest.mark.parametrize(
     "completion,expected",
     [
-        ("<name>The Legend of Zelda</name>", "The Legend of Zelda"),
-        ("I think it's <name>Halo 3</name>", "Halo 3"),
+        ("<answer>The Legend of Zelda</answer>", "The Legend of Zelda"),
+        ("I think it's <answer>Halo 3</answer>", "Halo 3"),
         (
-            "Not sure, but my guess is <name>Final Fantasy VII</name>.",
+            "Not sure, but my guess is <answer>Final Fantasy VII</answer>.",
             "Final Fantasy VII",
         ),
         ("There is no answer here", None),
-        ("Incomplete <name> tag", None),
+        ("Incomplete <answer> tag", None),
         ("", None),
         (
-            "我的猜测是 <name>Ghost of Tsushima</name>。\n理由：第二张图片展示了樱花树、飘落的花瓣和雪山背景，这些元素与《对马岛之魂》（Ghost of Tsushima）中标志性的樱花场景高度吻合。游戏以日本战国时期的对马岛为背景，樱花作为核心视觉符号贯穿整个游戏，营造出独特的东方美学氛围。此外，Metacritic评分为89%也符合该游戏的实际评分（原版为83%，但可能指重制版或特定版本）。虽然第一次猜测错误，但结合樱花主题和高评分，此推测更为合理。",
+            "我的猜测是 <answer>Ghost of Tsushima</answer>。\n理由：第二张图片展示了樱花树、飘落的花瓣和雪山背景，这些元素与《对马岛之魂》（Ghost of Tsushima）中标志性的樱花场景高度吻合。游戏以日本战国时期的对马岛为背景，樱花作为核心视觉符号贯穿整个游戏，营造出独特的东方美学氛围。此外，Metacritic评分为89%也符合该游戏的实际评分（原版为83%，但可能指重制版或特定版本）。虽然第一次猜测错误，但结合樱花主题和高评分，此推测更为合理。",
             "Ghost of Tsushima",
         ),
     ],
@@ -325,7 +325,7 @@ async def test_progress_initial_incorrect(test_dataset, test_template, test_game
                 {
                     "message": {
                         "role": "assistant",
-                        "content": "I think this is <name>Wrong Game</name>. The image shows...",
+                        "content": "I think this is <answer>Wrong Game</answer>. The image shows...",
                     }
                 }
             ]
@@ -358,7 +358,7 @@ async def test_progress_initial_correct(test_dataset, test_template, test_game):
                 {
                     "message": {
                         "role": "assistant",
-                        "content": "I think this is <name>Test Game</name>. The image shows...",
+                        "content": "I think this is <answer>Test Game</answer>. The image shows...",
                     }
                 }
             ]
@@ -391,7 +391,7 @@ async def test_progress_same_franchise(test_dataset, test_template, test_game):
                 {
                     "message": {
                         "role": "assistant",
-                        "content": "I think this is <name>Same Franchise Game</name>. The image shows...",
+                        "content": "I think this is <answer>Same Franchise Game</answer>. The image shows...",
                     }
                 }
             ]
@@ -432,7 +432,7 @@ async def test_progress_subsequent_step(test_dataset, test_template, test_game):
                 {
                     "message": {
                         "role": "assistant",
-                        "content": "Now I think it's <name>Test Game</name>. The metacritic score helps...",
+                        "content": "Now I think it's <answer>Test Game</answer>. The metacritic score helps...",
                     }
                 }
             ]
@@ -446,7 +446,7 @@ async def test_progress_subsequent_step(test_dataset, test_template, test_game):
             {"role": "user", "content": ["Initial prompt"]},
             {
                 "role": "assistant",
-                "content": "I think this is <name>Wrong Game</name>.",
+                "content": "I think this is <answer>Wrong Game</answer>.",
             },
         ],
     )

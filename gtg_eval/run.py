@@ -271,7 +271,7 @@ def _build_argparse():
     parser.add_argument(
         "--prompt-template",
         type=str,
-        default="prompt_template/english.json",
+        default="prompt_template/english-v3.json",
         help="Path to prompt template JSON file",
     )
     parser.add_argument(
