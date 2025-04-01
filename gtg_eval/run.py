@@ -8,15 +8,10 @@ import os
 import sqlite3
 import time
 
-import litellm
-from tqdm.asyncio import tqdm_asyncio
 from loguru import logger
+from tqdm.asyncio import tqdm_asyncio
 
-from gtg_eval import dataset, evaluation, logging, schema, utils
-
-
-# Gemini models do no support seed=.
-litellm.drop_params = True
+from gtg_eval import dataset, evaluation, lm_adapter, logging, schema, utils
 
 
 @dataclasses.dataclass
@@ -115,57 +110,20 @@ def save_checkpoint(conn: sqlite3.Connection, game_id: str, ckpt: _Checkpoint):
     conn.commit()
 
 
-class LLM:
-    def __init__(self, **kwargs):
-        self._kwargs = kwargs
-        self.last_prompt_tokens = 0
-        self.last_completion_tokens = 0
-        self.last_total_tokens = 0
-
-    async def completion(self, **kwargs):
-        """Wrapper for litellm.completion that tracks token usage."""
-        start_time = time.time()
-        response = await litellm.acompletion(max_retries=5, **self._kwargs, **kwargs)
-        elapsed = time.time() - start_time
-
-        # Extract token usage
-        prompt_tokens = 0
-        completion_tokens = 0
-        if usage := getattr(response, "usage", None):
-            prompt_tokens = getattr(usage, "prompt_tokens", 0)
-            completion_tokens = getattr(usage, "completion_tokens", 0)
-        total_tokens = prompt_tokens + completion_tokens
-
-        # Update token tracker
-        self.last_prompt_tokens = prompt_tokens
-        self.last_completion_tokens = completion_tokens
-        self.last_total_tokens = total_tokens
-
-        # Log token usage
-        logger.info(
-            "Completion finished",
-            elapsed_seconds=elapsed,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-        )
-
-        return response
-
-
 async def _run_game(
     ds: dataset.Dataset,
     db_path: str,
     template: schema.PromptTemplate,
     game_id: str,
-    completion_kwargs: dict,
+    adapter_type: lm_adapter.AdapterType,
+    lm_kwargs: dict,
 ) -> schema.Trace:
     game = ds[game_id]
     logger.info("Processing game", game_id=game_id)
 
     # Each thread needs its own DB connection and LLM instance
     conn = setup_checkpoint_db(db_path)
-    llm = LLM(**completion_kwargs)
+    llm = lm_adapter.make_lm_adapter(adapter_type, **lm_kwargs)
 
     try:
         # Check if we have a checkpoint for this game
@@ -292,6 +250,12 @@ def _build_argparse():
         default=1,
         help="Number of concurrent evaluation workers (default: 1)",
     )
+    parser.add_argument(
+        "--adapter-type",
+        type=lm_adapter.AdapterType,
+        default=lm_adapter.AdapterType.LITELLM,
+        help="Adapter type (default: litellm)",
+    )
     return parser
 
 
@@ -302,10 +266,6 @@ async def main():
         level=args.log_level,
         colorize=True,
     )
-
-    # if not litellm.supports_vision(model=args.model):
-    #     logger.error("Model does not support vision", model=args.model)
-    #     return 1
 
     game_ids = utils.parse_id_range(args.game_ids)
     logger.info("games to evaluate", count=len(game_ids))
@@ -348,15 +308,6 @@ async def main():
         "seed": 1337,
     }
 
-    # Add Gemini-specific safety settings if needed
-    if "gemini" in args.model.lower():
-        completion_kwargs["safety_settings"] = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-        ]
-
     traces = {}
 
     # Process games concurrently
@@ -373,6 +324,7 @@ async def main():
                         args.checkpoint_db,
                         template,
                         game_id,
+                        args.adapter_type,
                         completion_kwargs,
                     )
                 )
