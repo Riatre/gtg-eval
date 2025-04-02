@@ -208,10 +208,25 @@ async def main(
     adapter_type: Annotated[
         lm_adapter.AdapterType, typer.Option()
     ] = lm_adapter.AdapterType.LITELLM,
+    api_base: Annotated[
+        str | None, typer.Option(help="OpenAI-compatible API base")
+    ] = None,
+    api_key_env: Annotated[
+        str | None,
+        typer.Option(help="Environment variable name of API key for --api-base"),
+    ] = None,
 ) -> int:
     logging.setup_logging(
         term=lambda msg: tqdm_asyncio.write(msg, end=""), colorize=True
     )
+
+    api_key = None
+    if api_base is not None:
+        assert adapter_type == lm_adapter.AdapterType.LITELLM, (
+            "Cannot use --api-base if adapter is not LITELLM"
+        )
+        assert api_key_env is not None, "Must set --api-key-env if --api-base is set"
+        api_key = os.environ[api_key_env]
 
     game_ids_list = utils.parse_id_range(game_ids)
     logger.info("games to evaluate", count=len(game_ids_list))
@@ -253,6 +268,11 @@ async def main(
         "max_tokens": max_tokens,
         "seed": 1337,
     }
+    if api_base is not None:
+        completion_kwargs |= {
+            "api_base": api_base,
+            "api_key": api_key,
+        }
 
     traces = {}
 
