@@ -6,7 +6,7 @@ const args = parse(Deno.args, {
   string: ["input", "output"],
   default: {
     input: "./raw/20250329/gtg_puzzles.ts",
-    output: "./gtg_puzzles.jsonl"
+    output: "./20250329/gtg_puzzles.jsonl"
   },
   alias: {
     i: "input",

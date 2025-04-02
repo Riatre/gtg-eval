@@ -1,3 +1,7 @@
 .venv
 data/**/*.webp
 data/**/*.mp4
+data/**/*.jsonl
+data/raw/**/*.ts
+logs
+.aider*
