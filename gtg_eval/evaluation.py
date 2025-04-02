@@ -319,6 +319,8 @@ async def progress(
     state: schema.EvaluationState,
     template: schema.PromptTemplate,
     completion: Callable,
+    *,
+    image_before_text: bool = False,
 ) -> schema.EvaluationState:
     """Run one step in the evaluation process.
 
@@ -343,6 +345,15 @@ async def progress(
 
     # Build the next prompt
     next_prompt = await build_next_prompt(dataset, state, template, allow_video=False)
+    if image_before_text:
+        assert len(next_prompt["content"]) == 2, "Image must be the second message"
+        assert next_prompt["content"][0]["type"] == "text", (
+            "Text must be the first message"
+        )
+        assert next_prompt["content"][1]["type"] == "image_url", (
+            "Image must be the second message"
+        )
+        next_prompt["content"] = next_prompt["content"][::-1]
 
     # Create messages list for the model
     messages = state.messages + [next_prompt]

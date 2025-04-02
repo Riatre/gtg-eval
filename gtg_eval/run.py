@@ -116,6 +116,7 @@ async def _run_game(
     db_path: str,
     template: schema.PromptTemplate,
     game_id: str,
+    image_before_text: bool,
     adapter_type: lm_adapter.AdapterType,
     lm_kwargs: dict,
 ) -> schema.Trace:
@@ -149,7 +150,11 @@ async def _run_game(
             step_start_time = time.time()
             # Run the evaluation step
             ckpt.state = await evaluation.progress(
-                ds, ckpt.state, template, llm.completion
+                ds,
+                ckpt.state,
+                template,
+                llm.completion,
+                image_before_text=image_before_text,
             )
             step_time = time.time() - step_start_time
             ckpt.step_times.append(step_time)
@@ -215,6 +220,9 @@ async def main(
         str | None,
         typer.Option(help="Environment variable name of API key for --api-base"),
     ] = None,
+    image_before_text: Annotated[
+        bool, typer.Option(help="Whether to put the image before the text")
+    ] = False,
 ) -> int:
     logging.setup_logging(
         term=lambda msg: tqdm_asyncio.write(msg, end=""), colorize=True
@@ -290,6 +298,7 @@ async def main(
                         checkpoint_db,
                         template,
                         game_id,
+                        image_before_text,
                         adapter_type,
                         completion_kwargs,
                     )
