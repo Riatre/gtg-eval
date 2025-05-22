@@ -367,15 +367,21 @@ async def progress(
         model_message = response["choices"][0]["message"]
         assert model_message["role"] == "assistant"
         content = model_message["content"]
+        reasoning_content = model_message.get("reasoning_content", None)
     else:
         model_message = response.choices[0].message
         assert model_message.role == "assistant"
         content = model_message.content
+        reasoning_content = getattr(model_message, "reasoning_content", None)
     if not content:
         content = ""
+    if not reasoning_content:
+        reasoning_content = ""
 
     # Extract the game name from the response
-    logger.info("Model response message", content=content)
+    logger.info(
+        "Model response message", content=content, reasoning_content=reasoning_content
+    )
     answer_text = parse_answer(content)
     if answer_text is None:
         logger.warning("No answer found in model response", content=content)

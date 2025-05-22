@@ -223,6 +223,12 @@ async def main(
     image_before_text: Annotated[
         bool, typer.Option(help="Whether to put the image before the text")
     ] = False,
+    thinking_budget: Annotated[
+        int | None, typer.Option(help="Token budget for thinking")
+    ] = None,
+    reasoning_effort: Annotated[
+        str | None, typer.Option(help="Reasoning effort for OpenAI models")
+    ] = None,
 ) -> int:
     logging.setup_logging(
         term=lambda msg: tqdm_asyncio.write(msg, end=""), colorize=True
@@ -280,6 +286,13 @@ async def main(
         completion_kwargs |= {
             "api_base": api_base,
             "api_key": api_key,
+        }
+    if reasoning_effort is not None:
+        completion_kwargs["reasoning_effort"] = reasoning_effort
+    if thinking_budget is not None:
+        completion_kwargs["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": thinking_budget,
         }
 
     traces = {}
